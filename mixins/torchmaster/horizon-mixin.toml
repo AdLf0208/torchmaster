@@ -1,0 +1,98 @@
+[mod]
+id = "torchmaster"
+version = "0.1.0"
+priority = 100
+
+[compatibility]
+horizon_revision = "1d63e0a5a37a7a708eb0b32b49bf0dfeb28ed8a9"
+
+# The trait-mod install shim: `mod_api::mods()` must be non-empty for the pin's
+# `spawn_hooks` gate to reach `potential_spawns`. The launcher links it.
+[api]
+path = "api"
+
+# The pure spawn-veto engine (standalone crate lib, injected as
+# `crate::game::torchmaster`).
+# The content half is inside this bundle (`data/torchmaster-content.hmod`, the built
+# `content/torchmaster.hmod`): this writes it to `.horizon-cache/` and appends it to the
+# dev-mod list, so one `.hnmod` installs the content and the code. The registry
+# keeps one file per project, so a split port could not be listed; AE2 ships the
+# same pattern.
+[[injection]]
+id = "embedded-content"
+kind = "HEAD"
+cancellable = true
+target = "horizon_client::game::mods::content_root"
+helper = "embedded_content.rs"
+bindings = [
+  { name = "root", ty = "&std::path::Path", value = "root" },
+  { name = "enabled", ty = "&std::collections::BTreeSet<String>", value = "enabled" },
+  { name = "dev", ty = "&[std::path::PathBuf]", value = "dev" },
+]
+
+[[module]]
+id = "runtime"
+file = "crates/horizon-client/src/game.rs"
+name = "torchmaster"
+source = "runtime.rs"
+
+# Game-side glue: the placed-light registry, persistence and the hook bodies.
+[[module]]
+id = "state"
+file = "crates/horizon-client/src/game.rs"
+name = "torchmaster_state"
+source = "support.rs"
+
+# Natural spawning builds its possible-spawn list: a torch or lamp in range
+# vetoes the category by emptying the list (API 388).
+[[injection]]
+id = "potential-spawns"
+hook = "potential_spawns"
+hook_version = 1
+kind = "HEAD"
+helper = "potential_spawns.rs"
+bindings = [
+  { name = "dimension", ty = "&str", value = "dimension" },
+  { name = "category", ty = "&str", value = "category" },
+  { name = "pos", ty = "[i32; 3]", value = "pos" },
+  { name = "canceled", ty = "&mut bool", value = "canceled" },
+]
+
+# A torch or lamp placed, replaced or removed: refresh the registry.
+[[injection]]
+id = "block-changed"
+hook = "block_changed"
+hook_version = 1
+kind = "HEAD"
+helper = "block_changed.rs"
+bindings = [
+  { name = "level", ty = "&crate::game::GameLevel<'_>", value = "self" },
+  { name = "dimension", ty = "LevelDimension", value = "dimension" },
+  { name = "pos", ty = "BlockPos", value = "pos" },
+  { name = "old", ty = "BlockStateId", value = "old" },
+  { name = "new", ty = "BlockStateId", value = "new" },
+]
+
+# The world opened or closed: load/save `<world>/torchmaster/lights.tsv`.
+[[injection]]
+id = "world-lifecycle"
+hook = "world_lifecycle"
+hook_version = 1
+kind = "HEAD"
+helper = "world.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "phase", ty = "WorldPhase", value = "phase" },
+]
+
+# End of a level tick: flush a changed registry and prune stale lights.
+[[injection]]
+id = "level-tick-post"
+hook = "level_tick_post"
+hook_version = 1
+kind = "HEAD"
+helper = "tick.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "dimension", ty = "&str", value = "dimension" },
+]

@@ -1,0 +1,14 @@
+# Torchmaster slice 1: the mega torch and the dread lamp, carried from the
+# upstream MIT assets (1.21.1) and adapted to the 26.3 content format. The
+# native bundle in ../ owns the natural-spawn veto.
+#
+# Licence: MIT (Xalcon/TorchMaster) — local-only until the maintainer approves
+# publishing (ARCHITECTURE.md section 8).
+id = "torchmaster"
+name = "Torchmaster"
+version = "21.1.14"
+description = "Special torch and lamp which prevent natural mob spawning"
+authors = ["Xalcon"]
+api = "0.2"
+side = "both"
+capabilities = ["registries"]
