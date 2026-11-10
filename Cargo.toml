@@ -1,0 +1,17 @@
+[package]
+# Ported from: Torchmaster 21.1.14 (Xalcon/TorchMaster, MIT), Minecraft Java
+# 1.21.1 NeoForge. Local-only until the maintainer approves publishing.
+name = "horizon-torchmaster"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+description = "Torchmaster for Horizon: mega torch and dread lamp natural-spawn prevention"
+
+[lib]
+# This exact source is also injected as a same-crate module by horizon-mixins.
+path = "mixins/torchmaster/runtime.rs"
+
+[workspace]
+members = ["tools/audit"]
+resolver = "2"

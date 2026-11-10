@@ -1,0 +1,9 @@
+[package]
+name = "mod-torchmaster"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# The launcher points this at the Horizon source it builds the game from. Any other
+# dependency must be a crate and version in Horizon's Cargo.lock.
+horizon-client = { git = "https://github.com/horizon-rust/horizon", rev = "1d63e0a5a37a7a708eb0b32b49bf0dfeb28ed8a9" }

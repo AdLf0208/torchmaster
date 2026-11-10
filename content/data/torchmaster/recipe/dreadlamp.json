@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "OOO",
+    "PGP",
+    "OBO"
+  ],
+  "key": {
+    "O": { "item": "minecraft:obsidian" },
+    "P": { "item": "minecraft:glass_pane" },
+    "G": { "item": "minecraft:glowstone" },
+    "B": { "item": "minecraft:black_dye" }
+  },
+  "result": {
+    "id": "torchmaster:dreadlamp"
+  }
+}

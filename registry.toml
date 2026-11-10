@@ -1,0 +1,49 @@
+id = "torchmaster"
+kind = "native-mod"
+name = "torchmaster"
+summary = "A Horizon port of torchmaster."
+description = """
+A port of [torchmaster](Xalcon/TorchMaster) for Horizon.
+
+**Implemented so far**
+
+- Analysis clone: `https://github.com/Xalcon/TorchMaster` at
+- `a11226c866bf4e9f0695621db5971418dffe3014` (`2026-10-14`, version
+- `21.1.14`), read from `common/`, `neoforge/` and the carried assets; the clone
+- was deleted after the notes (as required by AGENTS.md).
+- Mega Torch** (`torchmaster:megatorch`) vetoes natural spawns of every
+- non-friendly** entity category (vanilla: `monster`) in a cube of
+- `megaTorchRadius` (default **64**) around it. Source:
+- `logic/entityblocking/megatorch/MegatorchEntityBlockingLight.java:27-33`,
+
+**Not yet ported**
+
+- Spawners are deliberately not blocked.** Upstream's
+- `blockOnlyNaturalSpawns` defaults to true; the pin's `potential_spawns` only
+- fires for the natural path. The `false` mode (block spawners too) has no
+- hook at the pin and is not carried.
+- Phantoms and village sieges.** Upstream also vetoes phantom spawns
+- (`PlayerSpawnPhantomsEvent`) and village sieges (`VillageSiegeEvent`); the
+- latter now has a pin hook (`village_siege`, API 389), but phantoms do not go
+- through `potential_spawns`. Both are slice 2.
+
+Original copyright and licence notices are kept in this repository. Pinned to
+Horizon 1d63e0a and horizon-mixins 5a64af93. Help with the remaining slices is
+welcome.
+"""
+authors = ["AdLf0208"]
+owners = ["AdLf0208"]
+owner_ids = [107615167]
+license = "MIT"
+source = "https://github.com/AdLf0208/torchmaster"
+icon = "icons/torchmaster.png"
+categories = ["utility"]
+tags = ["port", "horizon"]
+
+[[versions]]
+version = "0.1.0"
+published = "2026-11-10"
+game = "26.3"
+file = "torchmaster.hnmod"
+sha256 = "ca1e15aaef33a965252b89041a7fa511c65c4853e29387a84550999a02a9106d"
+changelog = "First release"
