@@ -1,0 +1,8 @@
+{
+  "title": "Torchmaster",
+  "icon": "torchmaster:megatorch",
+  "items": [
+    "torchmaster:megatorch",
+    "torchmaster:dreadlamp"
+  ]
+}
