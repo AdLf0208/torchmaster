@@ -1,0 +1,17 @@
+{
+  "recipe": {
+    "file": "data/torchmaster/recipe/megatorch.json",
+    "tag_items": {
+      "#minecraft:logs": "minecraft:oak_log"
+    },
+    "expect": {
+      "id": "torchmaster:megatorch",
+      "count": 1
+    },
+    "consume": "minecraft:diamond"
+  },
+  "loot": {
+    "block": "torchmaster:megatorch",
+    "expect": "torchmaster:megatorch"
+  }
+}

@@ -6,10 +6,10 @@
     "GLG"
   ],
   "key": {
-    "T": { "item": "minecraft:torch" },
-    "D": { "item": "minecraft:diamond" },
-    "G": { "item": "minecraft:gold_block" },
-    "L": { "tag": "minecraft:logs" }
+    "T": "minecraft:torch",
+    "D": "minecraft:diamond",
+    "G": "minecraft:gold_block",
+    "L": "#minecraft:logs"
   },
   "result": {
     "id": "torchmaster:megatorch"

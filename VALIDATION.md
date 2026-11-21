@@ -32,3 +32,17 @@ possible at this pin (no launcher-built game on this box). Both are stated in
 | `NEGATIVE=1 tools/e2e.sh` | exits 1 (`expected a spawn with the torch, saw none`) |
 | content `.hmod` | 6,488 B, SHA-256 `6d192414…cb9d5` |
 | native `.hnmod` | 10,036 B, SHA-256 `1c21a3a9…e68c` |
+
+## 26.3 dialect sweep (2026-11-21) — 0.2.1
+
+| Check | Command | Result |
+|---|---|---|
+| static dialect | `python3 ports/tools/check_261_dialect.py torchmaster.hmod` | exit 0; pre-fix package exit 1 (`../_shared/evidence/torchmaster/dialect-check-red.log`) |
+| tests | `cargo test --offline` | exit 0 (`dialect-test.log`) |
+| package | `cargo horizon-mod build` twice after `rm -f Cargo.lock` | `cmp`-identical, built against 0a875da |
+| registry check | `cargo horizon-mod check torchmaster.hmod` | **22,418 B**, SHA-256 `0e5f301e8cd292e0e20402b6e99916207abe37473ce7a58fb625736fb2eb4066`, exit 0 |
+| fits the pin | `cargo horizon-mod fits torchmaster.hmod --build 0a875da` | `0a875da  made for`, exit 0 |
+| the gate | `python3 ports/tools/verify-sdk-package.py torchmaster` | 1/1 |
+| in game | `tools/e2e-dialect.sh` | `PASS` + `EXIT:0`; `SELFTEST=1` `FAIL` + `EXIT:1`; `check-e2e-logs.py torchmaster --strict` exit 0 |
+
+Changed: 2 recipes + 2 loot tables. Proof: megatorch crafts 1 and drops 1; the pre-fix 0.2.0 game leg is red on both (`e2e-dialect-red.log`). Full record in [`notes.md`](notes.md) §"26.3 dialect sweep".

@@ -7,7 +7,7 @@
 #
 # Cargo's name and version are not the mod's identity: horizon-mod.toml is.
 name = "torchmaster"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 license = "MIT"
 description = "Torchmaster for Horizon: the Mega Torch and the Dread Lamp keep natural spawns out of a cube"

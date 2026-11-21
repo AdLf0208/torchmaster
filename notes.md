@@ -410,3 +410,46 @@ The delivered package is `torchmaster.hmod` in the port root: **24,846 B**, SHA-
 > `runtime.rs` and its 8 tests unchanged.
 
 Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices,rust-port
+
+## 26.3 dialect sweep (2026-11-21) — carried recipes and loot tables, proven in game (0.2.1)
+
+The shared checker `ports/tools/check_261_dialect.py` (generalised from `ports/modularrouters/tools/data_shape.py`
+and `ports/createaddition/tools/data_shape.py`) found the 1.21.1 forms still in the package that had shipped
+at **0.2.0**; `cargo horizon-mod check`, `fits` and every unit test had passed on them, and the content
+was dead in game (a recipe returns nothing; a block drops empty).
+
+| Family | Files | 1.21.1 form that shipped | 26.3 form |
+|---|---|---|---|
+| recipe ingredients | 2 (`megatorch`, `dreadlamp`): `{"item": …}` / `{"tag": …}` in `key` | `{"item": "…"}` / `{"tag": "…"}` | `"minecraft:…"` / `"#c:…"` |
+| loot pools | 2 (`megatorch`, `dreadlamp`): `"conditions"` array | `"conditions": [ … ]`, `bonus_rolls`, `"rolls": 1.0` | one `"condition": {"type": "minecraft:…"}`, no `bonus_rolls`, `"rolls": 1` |
+
+This is the port with a **pre-fix game leg**: `e2e-dialect-red.log` runs the same proof on 0.2.0 and fails both ways — `expected 1 torchmaster:megatorch, got None` (the grid held the exact ingredients) and `torchmaster:megatorch dropped 0 of torchmaster:megatorch` while the vanilla control dropped 1.
+
+**Red, kept:** `ports/_shared/evidence/torchmaster/dialect-check-red.log` — the checker exits 1 on the pre-fix
+package itself (`dialect-prefix-0.2.0.hmod`, 0.2.0, kept in the same folder), naming every file.
+A reconstructed fixture carrying all three loot shapes plus a `requires_tool` block with no mineable tag is
+red too (`../../morered/dialect-check-fixture-red.log`). The checker's `--selftest` fails when any shape is
+accepted.
+
+  `recipe megatorch.json: crafting_shaped -> {"count": 1, "item": "torchmaster:megatorch", "slot": 200}`; `the result reached the inventory (1 torchmaster:megatorch), the grid emptied, and minecraft:diamond was consumed`
+
+  `the vanilla control dropped one, torchmaster:megatorch dropped 1 torchmaster:megatorch, and the cell is air`
+
+The in-game leg is `tools/e2e-dialect.sh` (`ports/_shared/evidence/torchmaster/e2e-dialect.log`): `PASS` + `EXIT:0`,
+and `SELFTEST=1` inverts the expectation and ends `FAIL` + `EXIT:1` (`e2e-dialect-selftest.log`).
+`check-e2e-logs.py torchmaster --strict` exits 0.
+
+**Ladder** (all in `build-slot.sh` leases, `CARGO_INCREMENTAL=0`, `BUILD_LOCAL=1`):
+
+| Step | Command | Result |
+|---|---|---|
+| tests | `cargo test --offline` | **8 passed**, 0 failed (`dialect-test.log`) |
+| package | `rm -f Cargo.lock && cargo horizon-mod build` (twice) | built against **0a875da** (re-pinned from 0b14f8a), second build `cmp`-identical (`dialect-build-1.log`, `dialect-build-2.log`) |
+| registry check | `cargo horizon-mod check torchmaster.hmod` | `torchmaster 0.2.1 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)`, **22,418 B**, sha256 `0e5f301e8cd2…` (`dialect-check.log`) |
+| fits the pin | `cargo horizon-mod fits torchmaster.hmod --build 0a875da` | `0a875da  made for`, exit 0 (`dialect-fits-0a875da.log`) |
+| fits the previous build | `… --build 0b14f8a` | `fits`, exit 0 (`dialect-fits-0b14f8a.log`) |
+| the gate | `python3 ports/tools/verify-sdk-package.py torchmaster` | **1/1** (`dialect-gate.log`) |
+
+Package 0.2.1: **22,418 B**, SHA-256 `0e5f301e8cd292e0e20402b6e99916207abe37473ce7a58fb625736fb2eb4066`.
+
+Skills: superpowers/using-superpowers,systematic-debugging,test-driven-development,verification-before-completion; BeautifulRust/none (no Rust change)

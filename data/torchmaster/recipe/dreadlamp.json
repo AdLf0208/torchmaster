@@ -6,10 +6,10 @@
     "OBO"
   ],
   "key": {
-    "O": { "item": "minecraft:obsidian" },
-    "P": { "item": "minecraft:glass_pane" },
-    "G": { "item": "minecraft:glowstone" },
-    "B": { "item": "minecraft:black_dye" }
+    "O": "minecraft:obsidian",
+    "P": "minecraft:glass_pane",
+    "G": "minecraft:glowstone",
+    "B": "minecraft:black_dye"
   },
   "result": {
     "id": "torchmaster:dreadlamp"
