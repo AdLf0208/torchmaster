@@ -56,6 +56,25 @@ impl LightKind {
         }
     }
 
+    /// The word the world file and the `/torchmaster` readout use for this light.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::MegaTorch => "megatorch",
+            Self::DreadLamp => "dreadlamp",
+        }
+    }
+
+    /// The light a world-file word names.
+    #[must_use]
+    pub fn of_name(name: &str) -> Option<Self> {
+        match name {
+            "megatorch" => Some(Self::MegaTorch),
+            "dreadlamp" => Some(Self::DreadLamp),
+            _ => None,
+        }
+    }
+
     /// Whether this light vetoes a spawn of `category` (`MobCategory.name()`).
     /// The mega torch takes every non-friendly category (`monster`); the dread
     /// lamp takes every friendly one except `misc`.
@@ -136,11 +155,7 @@ pub fn parse_lights(text: &str) -> Vec<Light> {
             let x = fields.next()?.parse::<i32>().ok()?;
             let y = fields.next()?.parse::<i32>().ok()?;
             let z = fields.next()?.parse::<i32>().ok()?;
-            let kind = match fields.next()? {
-                "megatorch" => LightKind::MegaTorch,
-                "dreadlamp" => LightKind::DreadLamp,
-                _ => return None,
-            };
+            let kind = LightKind::of_name(fields.next()?)?;
             if dimension.is_empty() || fields.next().is_some() {
                 return None;
             }
@@ -158,16 +173,69 @@ pub fn parse_lights(text: &str) -> Vec<Light> {
 pub fn format_lights(lights: &[Light]) -> String {
     let mut text = String::new();
     for light in lights {
-        let kind = match light.kind {
-            LightKind::MegaTorch => "megatorch",
-            LightKind::DreadLamp => "dreadlamp",
-        };
         text.push_str(&format!(
             "{}\t{}\t{}\t{}\t{}\n",
-            light.dimension, light.pos[0], light.pos[1], light.pos[2], kind
+            light.dimension,
+            light.pos[0],
+            light.pos[1],
+            light.pos[2],
+            light.kind.name()
         ));
     }
     text
+}
+
+/// The one-line summary the `/torchmaster` readout prints: how many blocking lights the
+/// registry holds, per kind. This is what the removed `log::info!` call said when a world
+/// loaded its lights.
+#[must_use]
+pub fn count_line(lights: &[Light]) -> String {
+    if lights.is_empty() {
+        return "torchmaster: no blocking lights".to_owned();
+    }
+    let mega = lights
+        .iter()
+        .filter(|light| light.kind == LightKind::MegaTorch)
+        .count();
+    let dread = lights.len() - mega;
+    let mut kinds = Vec::new();
+    if mega > 0 {
+        kinds.push(format!("{mega} megatorch"));
+    }
+    if dread > 0 {
+        kinds.push(format!("{dread} dreadlamp"));
+    }
+    let plural = if lights.len() == 1 { "" } else { "s" };
+    format!(
+        "torchmaster: {} blocking light{plural}: {}",
+        lights.len(),
+        kinds.join(", ")
+    )
+}
+
+/// One readout line per light, in registry order, at most `max` of them: the placed light's
+/// dimension, position and kind. A longer registry ends with a line saying how many were
+/// left out, so the readout is never silently truncated.
+#[must_use]
+pub fn light_lines(lights: &[Light], max: usize) -> Vec<String> {
+    let mut lines: Vec<String> = lights
+        .iter()
+        .take(max)
+        .map(|light| {
+            format!(
+                "torchmaster: {} {} {} {} {}",
+                light.dimension,
+                light.pos[0],
+                light.pos[1],
+                light.pos[2],
+                light.kind.name()
+            )
+        })
+        .collect();
+    if lights.len() > max {
+        lines.push(format!("torchmaster: … {} more", lights.len() - max));
+    }
+    lines
 }
 
 #[cfg(test)]
@@ -377,6 +445,57 @@ mod tests {
              minecraft:the_nether\t0\t64\t0\tdreadlamp\n"
         );
         assert_eq!(parse_lights(&text), lights);
+    }
+
+    #[test]
+    fn the_readout_counts_the_lights_by_kind() {
+        assert_eq!(count_line(&[]), "torchmaster: no blocking lights");
+        assert_eq!(
+            count_line(&[light(
+                "minecraft:overworld",
+                [0, 64, 0],
+                LightKind::MegaTorch
+            )]),
+            "torchmaster: 1 blocking light: 1 megatorch"
+        );
+        let both = vec![
+            light("minecraft:overworld", [0, 64, 0], LightKind::MegaTorch),
+            light("minecraft:overworld", [8, 64, 0], LightKind::DreadLamp),
+            light("minecraft:the_nether", [0, 64, 0], LightKind::MegaTorch),
+        ];
+        assert_eq!(
+            count_line(&both),
+            "torchmaster: 3 blocking lights: 2 megatorch, 1 dreadlamp"
+        );
+    }
+
+    #[test]
+    fn the_readout_lists_lights_in_registry_order_and_caps_the_list() {
+        let lights = vec![
+            light("minecraft:overworld", [2, 201, 0], LightKind::MegaTorch),
+            light("minecraft:the_nether", [0, 64, 0], LightKind::DreadLamp),
+        ];
+        assert_eq!(
+            light_lines(&lights, 8),
+            vec![
+                "torchmaster: minecraft:overworld 2 201 0 megatorch",
+                "torchmaster: minecraft:the_nether 0 64 0 dreadlamp",
+            ]
+        );
+        let many: Vec<Light> = (0..40)
+            .map(|x| light("minecraft:overworld", [x, 64, 0], LightKind::MegaTorch))
+            .collect();
+        let capped = light_lines(&many, 2);
+        assert_eq!(capped.len(), 3, "two lines plus the left-out line");
+        assert_eq!(capped[2], "torchmaster: … 38 more");
+    }
+
+    #[test]
+    fn the_world_file_word_and_the_kind_name_each_other() {
+        for kind in [LightKind::MegaTorch, LightKind::DreadLamp] {
+            assert_eq!(LightKind::of_name(kind.name()), Some(kind));
+        }
+        assert_eq!(LightKind::of_name("feral_flare_lantern"), None);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 id = "torchmaster"
 name = "Torchmaster"
-version = "0.2.1"
+version = "0.2.2"
 description = """Torchmaster for Horizon: the Mega Torch keeps hostile monsters from spawning
 naturally in a cube of 64 blocks around it, and the Dread Lamp does the same for passive animals
 like squids, bats and ocelots. Both are ordinary blocks with a recipe, a loot table and their own

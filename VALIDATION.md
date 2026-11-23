@@ -21,6 +21,30 @@ the compile gate is `cargo test`/`clippy` on the crate, and no in-game run was
 possible at this pin (no launcher-built game on this box). Both are stated in
 `notes.md` § "Migration to the SDK format".
 
+## 0.2.2 — R9: SDK-only dependencies, no lock, and the readout (2026-11-23, pin `0a875da`)
+
+| Check | Command | Result |
+|---|---|---|
+| the rule, before the change | `verify-sdk-package.py torchmaster` on 0.2.1 | **0/1** — `FAIL SDK-only dependencies (R9): log`, `FAIL no packed Cargo.lock` (`../_shared/evidence/torchmaster/r9/gate-before-0.2.1.log`) |
+| TDD | tests first, then `count_line`/`light_lines`/`LightKind::name` | compile-red first (`r9/unit-tdd-red.log`), then **11 passed** |
+| tests | `cargo test --offline` | **11 passed**, 0 failed (`r9/test.log`, `sdk-test.log`) |
+| format and lints | `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` | clean, 0 warnings |
+| package | `rm -f Cargo.lock && cargo horizon-mod build` | 0.2.2 `.hmod`, no `Cargo.lock` inside (`r9/build.log`) |
+| registry check | `cargo horizon-mod check torchmaster.hmod` | `torchmaster 0.2.2 (native-mod, native-1/0a875da…/e59da90…, for 26.3)` (`r9/check.log`) |
+| fits the pin | `cargo horizon-mod fits torchmaster.hmod --build 0a875da` | `0a875da  made for`, exit 0 |
+| fits the previous build | `cargo horizon-mod fits torchmaster.hmod --build 0b14f8a` | `fits`, exit 0 |
+| launcher, lock-less | `launcher-game.sh build torchmaster` | `native-0a875da-… built`, `EXIT:0` (`r9/native-build-no-lock.log`) |
+| gate | `verify-sdk-package.py torchmaster` | **1/1** (`r9/gate-after.log`) |
+| spawn proof | `tools/e2e.sh` | `PASS` + `EXIT:0` — torch 0 vs control 3, outside 4, after break 4; lamp 0 bats vs control 1, 70 monsters still spawning (`../_shared/evidence/torchmaster-e2e/e2e.log`) |
+| counterfactual | `SELFTEST=1 tools/e2e.sh` | `FAIL` + `EXIT:1` (`e2e-selftest.log`) |
+| differential | `CONTROL=1 … tools/e2e.sh` on `CONTROL_GAME` | `FAIL` + `EXIT:1` — ids and command unknown (`e2e-control.log`) |
+| carried recipes + loot | `tools/e2e-dialect.sh` (two specs: megatorch, dreadlamp) | `PASS` + `EXIT:0`; `SELFTEST=1` `FAIL` + `EXIT:1` (`../_shared/evidence/torchmaster/e2e-dialect*.log`) |
+| log gate | `check-e2e-logs.py torchmaster-e2e --strict` | `logs=3 ok=3`, exit 0 |
+
+Changed: `log` removed (no logging surface at the pin; `/torchmaster` and `/torchmaster list` carry
+the information), `Cargo.lock` deleted, `Cargo.toml` and `horizon-mod.toml` at 0.2.2. Full record in
+[`notes.md`](notes.md) §0.2.2.
+
 ## The retired `.hnmod` bundle (pin `1d63e0a`, kept for the record)
 
 | Check | Result |

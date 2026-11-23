@@ -7,10 +7,15 @@
 //! `server_started` and `world_lifecycle` load and save the world file, and
 //! `level_tick_post` prunes a light whose block is gone.
 //!
+//! `register_commands` and `run_mod_command` carry `/torchmaster` and `/torchmaster list`,
+//! the readout that says which lights the registry holds. It replaced the five `log`
+//! calls this port used to make: the registry's R9 refuses every dependency but the SDK,
+//! and the pin has no logging surface a mod may write to (see `notes.md`).
+//!
 //! The decisions — which block vetoes which spawn category, the cubic range, the file
-//! format — are in [`runtime`], which uses no `mod_api` types and is tested by
-//! `cargo test` alone. This file is the glue that maps each moment of the game onto one
-//! of those functions.
+//! format, the readout wording — are in [`runtime`], which uses no `mod_api` types and is
+//! tested by `cargo test` alone. This file is the glue that maps each moment of the game
+//! onto one of those functions.
 
 pub mod runtime;
 
@@ -18,12 +23,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use mod_api::{
-    self, BlockChangedEvent, BlockState, Flow, Hooks, Host, HostSide, LevelHost,
-    LevelTickPostEvent, PotentialSpawnsEvent, ServerHost, ServerStartedEvent, WorldLifecycleEvent,
-    WorldPhase,
+    self, BlockChangedEvent, BlockState, Command, Flow, Hooks, Host, HostSide, LevelHost,
+    LevelTickPostEvent, PotentialSpawnsEvent, RegisterCommandsEvent, RunModCommandEvent,
+    ServerHost, ServerStartedEvent, Text, WorldLifecycleEvent, WorldPhase,
 };
 
-use runtime::{Light, LightKind, RADIUS, blocks, format_lights, parse_lights, remove, upsert};
+use runtime::{
+    Light, LightKind, RADIUS, blocks, count_line, format_lights, light_lines, parse_lights, remove,
+    upsert,
+};
 
 /// The lights live in `<world>/torchmaster/lights.tsv`, the path the retired bundle used,
 /// so a world that already has that file keeps its lights.
@@ -39,11 +47,18 @@ const PRUNE_TICKS: i64 = 100;
 /// the mod cannot reason about, so it is not recovered from silently.
 const LOCK: &str = "the torchmaster light lock is held for one short update";
 
-/// The placed blocking lights, and whether the world file is behind them.
+/// How many lights `/torchmaster list` prints before it says how many are left out.
+const LIST_LIMIT: usize = 32;
+
+/// The placed blocking lights, whether the world file is behind them, and the last problem
+/// an operator may need to know about.
 #[derive(Default)]
 struct Store {
     lights: Vec<Light>,
     dirty: bool,
+    /// A file the port could not read or write. The port once wrote this to the game log;
+    /// `/torchmaster` reports it now, because R9 allows no logging crate.
+    problem: Option<String>,
 }
 
 /// The mod's only state: the registry every hook below reads or writes.
@@ -88,10 +103,6 @@ impl Hooks for Mod {
         let mut store = self.store.lock().expect(LOCK);
         match after {
             Some(kind) => {
-                log::info!(
-                    "[torchmaster] registered {} at {dimension} {pos:?}",
-                    kind.block()
-                );
                 upsert(
                     &mut store.lights,
                     Light {
@@ -102,12 +113,6 @@ impl Hooks for Mod {
                 );
             }
             None => {
-                if let Some(kind) = before {
-                    log::info!(
-                        "[torchmaster] unregistered {} at {dimension} {pos:?}",
-                        kind.block()
-                    );
-                }
                 remove(&mut store.lights, dimension, pos);
             }
         }
@@ -117,15 +122,15 @@ impl Hooks for Mod {
     /// The server is up and its world is open: read the blocking lights the last session
     /// saved, once per open. A world that never saved has no file, which is an empty list.
     fn server_started(&self, host: &mut dyn ServerHost, _event: &mut ServerStartedEvent) {
-        let loaded = host
+        let (loaded, problem) = host
             .world_dir()
             .as_deref()
             .map(read_lights)
             .unwrap_or_default();
-        log::info!("[torchmaster] loaded {} blocking lights", loaded.len());
         let mut store = self.store.lock().expect(LOCK);
         store.lights = loaded;
         store.dirty = false;
+        store.problem = problem;
     }
 
     /// The world's own phases: write the registry before the world goes away, and forget it
@@ -194,6 +199,46 @@ impl Hooks for Mod {
             save(&self.store, world);
         }
     }
+
+    /// `/torchmaster` and `/torchmaster list` in the server's command tree. Reading the
+    /// registry is harmless, so both are open to every player; nothing here changes a light.
+    fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
+        event.commands.push(Command::new("torchmaster"));
+        event.commands.push(Command::new("torchmaster list"));
+    }
+
+    /// The readout: the count, the lights themselves for `list`, and the last file problem.
+    /// This is where the removed `log::info!`/`log::warn!` lines went.
+    fn run_mod_command(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut RunModCommandEvent<'_>,
+    ) -> Flow {
+        let path: Vec<&str> = event.command.literals.iter().map(String::as_str).collect();
+        let lines = match path.as_slice() {
+            ["torchmaster"] => readout(&self.store, false),
+            ["torchmaster", "list"] => readout(&self.store, true),
+            _ => return Flow::Continue,
+        };
+        for line in lines {
+            let _ = host.commands().feedback(Text::literal(line));
+        }
+        Flow::Cancel
+    }
+}
+
+/// The readout lines `/torchmaster` answers with: always the count, the lights when `list`
+/// asked for them, and the last file problem when there was one.
+fn readout(store: &Mutex<Store>, list: bool) -> Vec<String> {
+    let store = store.lock().expect(LOCK);
+    let mut lines = vec![count_line(&store.lights)];
+    if list {
+        lines.extend(light_lines(&store.lights, LIST_LIMIT));
+    }
+    if let Some(problem) = &store.problem {
+        lines.push(format!("torchmaster: last problem: {problem}"));
+    }
+    lines
 }
 
 /// The blocking light a block state names, if it is one of the port's two.
@@ -202,16 +247,17 @@ fn light_kind(level: &dyn LevelHost, state: BlockState) -> Option<LightKind> {
 }
 
 /// `<world>/torchmaster/lights.tsv`, parsed; a missing file is an empty registry and any
-/// other read error keeps the world playable with the lights it can still see.
-fn read_lights(world: &Path) -> Vec<Light> {
+/// other read error keeps the world playable with the lights it can still see. The error
+/// text is kept for `/torchmaster` instead of being written to the game log.
+fn read_lights(world: &Path) -> (Vec<Light>, Option<String>) {
     let path = world.join(STORE_DIR).join(STORE_FILE);
     match std::fs::read_to_string(&path) {
-        Ok(text) => parse_lights(&text),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(error) => {
-            log::warn!("[torchmaster] read {}: {error}", path.display());
-            Vec::new()
-        }
+        Ok(text) => (parse_lights(&text), None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (Vec::new(), None),
+        Err(error) => (
+            Vec::new(),
+            Some(format!("read {}: {error}", path.display())),
+        ),
     }
 }
 
@@ -219,13 +265,14 @@ fn read_lights(world: &Path) -> Vec<Light> {
 /// so the change is dropped and the next save of the world re-derives the list.
 fn save(store: &Mutex<Store>, world: Option<PathBuf>) {
     let Some(world) = world else {
-        log::warn!("[torchmaster] no world folder to save the blocking lights to");
-        store.lock().expect(LOCK).dirty = false;
+        let mut store = store.lock().expect(LOCK);
+        store.dirty = false;
+        store.problem = Some("no world folder to save the blocking lights to".to_owned());
         return;
     };
     let dir = world.join(STORE_DIR);
     if let Err(error) = std::fs::create_dir_all(&dir) {
-        log::warn!("[torchmaster] create {}: {error}", dir.display());
+        store.lock().expect(LOCK).problem = Some(format!("create {}: {error}", dir.display()));
         return;
     }
     let path = dir.join(STORE_FILE);
@@ -234,7 +281,13 @@ fn save(store: &Mutex<Store>, world: Option<PathBuf>) {
         format_lights(&store.lights)
     };
     match std::fs::write(&path, text) {
-        Ok(()) => store.lock().expect(LOCK).dirty = false,
-        Err(error) => log::warn!("[torchmaster] write {}: {error}", path.display()),
+        Ok(()) => {
+            let mut store = store.lock().expect(LOCK);
+            store.dirty = false;
+            store.problem = None;
+        }
+        Err(error) => {
+            store.lock().expect(LOCK).problem = Some(format!("write {}: {error}", path.display()));
+        }
     }
 }

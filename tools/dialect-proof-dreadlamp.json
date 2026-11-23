@@ -1,0 +1,15 @@
+{
+  "recipe": {
+    "file": "data/torchmaster/recipe/dreadlamp.json",
+    "tag_items": {},
+    "expect": {
+      "id": "torchmaster:dreadlamp",
+      "count": 1
+    },
+    "consume": "minecraft:glowstone"
+  },
+  "loot": {
+    "block": "torchmaster:dreadlamp",
+    "expect": "torchmaster:dreadlamp"
+  }
+}

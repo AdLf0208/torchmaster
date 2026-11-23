@@ -56,7 +56,7 @@ command -v jq >/dev/null || { echo "missing jq" >&2; exit 1; }
 [ -d "$RES/assets" ] || { echo "missing prepared resources: $RES" >&2; exit 1; }
 [ -f "$HMOD" ] || { echo "missing package: $HMOD" >&2; exit 1; }
 
-SCRATCH=$(mktemp -d /tmp/opencode/$MOD-dialect-home.XXXXXX)
+SCRATCH=$(mktemp -d "${E2E_TMP:-$HOME/.cache/horizon-e2e/scratch}"/$MOD-dialect-home.XXXXXX)
 export HORIZON_HOME=$SCRATCH/game
 export HORIZON_LAUNCHER_HOME=$SCRATCH/launcher
 export XDG_DATA_HOME=$SCRATCH/data
@@ -107,21 +107,30 @@ ctl wait 20
 echo "  arena: stone floor at y=$((AY - 1)), table at $AX $AY $AZ, loot block at $((AX + 6)) $AY $AZ"
 
 HOOK=(python3 "$CLONE/ports/tools/check_261_dialect.py" prove
-      --sock "$SOCK" --ctl "$CTL" --spec "$PORT/tools/dialect-proof.json"
+      --sock "$SOCK" --ctl "$CTL"
       --table "$AX" "$AY" "$AZ")
+# One spec per carried recipe/loot pair: the prover proves one of each per run, and this
+# port carries two (the Mega Torch and the Dread Lamp).
+PROVE=(python3 "$CLONE/ports/tools/check_261_dialect.py" prove
+       --sock "$SOCK" --ctl "$CTL" --table "$AX" "$AY" "$AZ")
 if [ "$SELFTEST" = 1 ]; then
     # The assertion is inverted on purpose (the expectation is impossible), so
-    # the proof MUST fail. This exit 1 is the evidence that it can.
+    # every proof MUST fail. This exit 1 is the evidence that it can.
     echo "== SELFTEST: the assertion is inverted on purpose =="
-    if "${HOOK[@]}" --selftest; then
-        fail "SELFTEST: the in-game dialect proof passed when it must fail"
-    fi
-    echo "SELFTEST: the proof failed as required, so the green leg is not vacuous"
+    for spec in "$PORT"/tools/dialect-proof*.json; do
+        if "${PROVE[@]}" --spec "$spec" --selftest; then
+            fail "SELFTEST: $spec passed when it must fail"
+        fi
+    done
+    echo "SELFTEST: the proofs failed as required, so the green leg is not vacuous"
     echo "FAIL: SELFTEST expected the proof to fail and it did, so the green assertion can fail (this exit 1 is the proof)"
     exit 1
 fi
 
-"${HOOK[@]}" || fail "the in-game dialect proof failed (see the lines above)"
+for spec in "$PORT"/tools/dialect-proof*.json; do
+    echo "== $(basename "$spec") =="
+    "${PROVE[@]}" --spec "$spec" || fail "$spec: the in-game dialect proof failed (see the lines above)"
+done
 
 echo "PASS: $HMOD is in the 26.3 dialect and its in-game proof passed; the phases above name the recipe it crafted (or why it carries none) and the loot table it broke (or why none was in the 1.21.1 form), each with the vanilla control beside it"
 exit 0
