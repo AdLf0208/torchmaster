@@ -450,6 +450,26 @@ pub fn pearl_removals(
     (in_range.into_iter().take(take).collect(), charges)
 }
 
+// ---- the feral-lantern spawner interaction (0.2.5) ---------------------------------
+
+/// Vanilla's light limit for a monster to spawn: `getMaxLocalRawBrightness` above
+/// this (the dimension's `monster_spawn_light_level`, default 7 — the SDK exposes
+/// both `DimensionSettings.monster_spawn_light_level` and the level-dimension
+/// counterpart at this pin). A spawner at or below it runs; above it, it does not.
+pub const SPAWNER_LIGHT_LIMIT: i32 = 7;
+
+/// Whether the light at a spawner suppresses the spawn it just asked for.
+///
+/// The feral lantern's own block declares light 15 and writes `invisible_light`
+/// blocks of light 15 into empty cells whose light is below 10 (all three numbers
+/// are read from the artefact — `ModRegistry.java:87,102` and
+/// `TorchmasterNeoforgeConfig.java:99-112`). Any of that light at the spawner
+/// exceeds vanilla's limit, which is how the lantern keeps a spawner quiet.
+#[must_use]
+pub fn spawner_light_suppresses(block_light: i32) -> bool {
+    block_light > SPAWNER_LIGHT_LIMIT
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -858,5 +878,19 @@ mod tests {
         let (removed, charges) = pearl_removals(center, &lights, 0, 0);
         assert_eq!(removed.len(), 3);
         assert_eq!(charges, 0);
+    }
+
+    // ---- the feral-lantern spawner interaction (0.2.5) ------------------------------
+
+    #[test]
+    fn a_spawner_is_suppressed_only_above_vanillas_light_limit() {
+        assert_eq!(SPAWNER_LIGHT_LIMIT, 7);
+        // A sealed dark box at light 0 spawns; the exact limit is still allowed.
+        assert!(!spawner_light_suppresses(0));
+        assert!(!spawner_light_suppresses(SPAWNER_LIGHT_LIMIT));
+        // One above the limit and both of the lantern's light values suppress it.
+        assert!(spawner_light_suppresses(SPAWNER_LIGHT_LIMIT + 1));
+        assert!(spawner_light_suppresses(i32::from(FLARE_LIGHT_LEVEL)));
+        assert!(spawner_light_suppresses(FLARE_MIN_LIGHT));
     }
 }

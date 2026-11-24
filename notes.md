@@ -897,15 +897,99 @@ EXIT:0
 
 Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices (named consts, `expect` with a reason, pure functions free of `mod_api`, `Clone` only for the part's stack copy)
 
+## 0.2.5 (2026-11-24) — the feral lantern's light quietens a mob spawner
+
+Pin **`0a875da91dbb0fdcb7ba8c42c11341aa229af51a`** (mixins `e59da909…`), registry entry ours on
+`main`, so this is an **Update** to **0.2.5** (0.2.4 staged on PR #1807).
+
+**The gate (passes; not `blocked`).** The pin stamps a spawner hook capable of the suppression:
+`hook:finalize_spawn` (`surface.json` hash `fde4a850…`, v1, `contract: cancel`,
+`cancellable: true`, `host: read`) reaches the `Hooks` trait as
+`fn finalize_spawn(&self, host: &dyn Host, event: &mut FinalizeSpawnEvent<'_>) -> Flow`
+(`HookId::FinalizeSpawn => "finalize_spawn"`; dispatch `receiver.finalize_spawn(&host, &mut p1)`).
+`FinalizeSpawnEvent` carries `reason: SpawnReason` (`Spawner`/`TrialSpawner`) and
+`spawn_cancelled: bool` ("no mob is added"), and `SpawnSource::Block(BlockPos)` names the spawner.
+The light read is stamped too: `EntitiesHost::level(&str) -> Option<LevelRef>` and
+`LevelRef::brightness(host, LightLayer::Block, [i32;3]) -> Option<i32>` (0..=15). No hook was
+invented and no spawner readout was faked. Evidence: `spawner/build-check-fits.log`,
+`spawner/native-build.log`. The older note "block spawners too has no hook at the pin" was
+measured at a retired pin; it is superseded by this one.
+
+**What the artefact declares.** Read from the upstream clone at
+`ports/_shared/upstream/torchmaster` commit `a11226c866bf4e9f0695621db5971418dffe3014`, files
+`blocks/FeralFlareLanternBlockEntity.java:99-118`, `ModRegistry.java:82-107` and
+`neoforge/.../TorchmasterNeoforgeConfig.java:99-120`: the lantern writes `invisible_light`
+(light **15**) into empty cells whose block light is below **10**, within radius **16**, every
+**5** ticks, capped at **255**. It has no spawner code of its own — `TorchmasterEventHandler.java:35`
+lists `SPAWNER` as a spawn reason the `blockOnlyNaturalSpawns` default leaves alone. The
+interaction is therefore the light itself, and the port expresses it against vanilla's limit:
+`DimensionSettings.monster_spawn_light_level` (default 7), `SPAWNER_LIGHT_LIMIT = 7`,
+`spawner_light_suppresses(light) = light > 7`. The hook reads the light at the cell the spawn
+would occupy; the SDK's `SpawnSource` variant whose name collides with the SDK's non-constructible
+`type:Block` is deliberately not named, because `uses.json` then records `handle:Block::new` and
+`fits --build 0b14f8a` false-fails (the same class recorded by framedblocks, mekanismcovers and
+rftoolsutility).
+
+**Red, before the glue** (`spawner/unit-tdd-red.log`): eight `E0425: cannot find function
+spawner_light_suppresses in this scope` errors, `cargo test` exit 101. `spawner/unit-tdd-green.log`
+then showed **21 passed, 0 failed** (20 → 21). `spawner/lint.log`: `cargo fmt --check` +
+`cargo clippy --all-targets -- -D warnings` clean, 0 warnings.
+
+| Step | Command | Result |
+|---|---|---|
+| tests | `cargo test --offline` | **21 passed**, 0 failed (`spawner/unit-tdd-green.log`, regenerated `sdk-test.log`) |
+| fmt + lints | `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` | clean, 0 warnings (`spawner/lint.log`) |
+| package | `rm -f Cargo.lock && cargo horizon-mod build` | 0.2.5 `.hmod`, no lock packed (`spawner/ladder.log`) |
+| registry check | `cargo horizon-mod check torchmaster.hmod` | `torchmaster 0.2.5 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)`, 43,053 B |
+| fits the pin | `… --build 0a875da` | `0a875da  made for`, exit 0 |
+| fits the previous build | `… --build 0b14f8a` | `fits`, exit 0 — both in `spawner/build-check-fits.log` |
+| launcher | `launcher-game.sh build torchmaster` | `Compiling torchmaster (1 of 1)`, `native-0a875da-8cdcea15ae53`, `EXIT:0` (`spawner/native-build.log`) |
+| the gate | `python3 ports/tools/verify-sdk-package.py torchmaster` | **1/1**, `package matches the tree: every packed file is the tree's bytes` |
+
+**In game on the delivered bytes** (`ports/_shared/evidence/torchmaster-e2e/`, phase G added to
+`tools/e2e.sh`):
+
+```
+PASS: control=3, torch=0, outside=3, after_break=4 monsters;
+      lamp_control=4, lamp=0, lamp_outside=4 bats, lamp_box_monsters=69;
+      drops torch=1 lamp=1 control=1; flare=7 lights, after break 0, stone control 0;
+      pearl 3 -> 0 lights for damage 0 -> 3, vanilla cell 2 -> 2 for damage 3;
+      spawner 4 -> 0 zombies beside a lit lantern; /torchmaster readouts matched at every phase
+EXIT:0
+```
+
+- **Spawner:** a zombie spawner in a sealed dark box grew **4** zombies in 400 ticks; with a lit
+  feral lantern two blocks away the type-filtered `ctl entities 16 minecraft:zombie` count was
+  **0** after another 400 ticks. The assertion parses the entity list, never the absence of an
+  error. The arena is rebuilt and the player stands on the loaded floor before `/setblock`
+  (an unloaded chunk answers "That position is not loaded"; a survival `tp` into one drops the
+  player). `ctl inventory` slots are 0-based while `ctl select` takes 1–9 — unchanged from 0.2.4.
+- **Counterfactual:** `SELFTEST=spawner` inverted the assertion (`spawner/spawner/e2e-selftest-spawner.log`,
+  kept in a subfolder so the strict checks keep their counts) and ended `FAIL` + `EXIT:1` (the
+  count went 2 → 1, i.e. the lantern really quietened it). The unmodded `CONTROL=1`, original
+  `SELFTEST=1`, `SELFTEST=flare` and `SELFTEST=pearl` legs all redid their `EXIT:1`.
+  `check-e2e-logs.py torchmaster-e2e --strict` → `logs=5 ok=5`, `torchmaster --strict` → `logs=7 ok=7`.
+- **Carrying families stay green:** the dialect leg proved all four recipes and three loot tables
+  on the delivered archive (`PASS` + `EXIT:0`, `SELFTEST=1` `FAIL` + `EXIT:1`).
+
+**Coverage:** the feral-lantern spawner-interaction row moves from "not ported" to tested
+(e2e phase G + one unit test). Frozen Pearl sound, the line-of-sight menu/GUI and the volume
+renderer remain not ported (tier `logic`; no sound/menu/renderer surface carried).
+
+Delivered `torchmaster.hmod` **43,053 B**, SHA-256
+**`bf05ad2348e0eb85300fdf6c81dd4d98003bdbb30e69369aee79e3574de49aa8`**, 44 entries, no `Cargo.lock`.
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices (named const, pure rule free of `mod_api`, no clone-to-satisfy-borrowck, `expect` with a reason)
+
 ## Next slice
 
-**Family:** the feral-lantern spawner interactions (the last flare family still expressible at this
-tier), starting by checking whether the pin stamps a hook for lantern-fed spawner behaviour.
-**Gap line:** "the feral-lantern spawner interactions are still not carried" (§0.2.3) and its
-coverage row.
-**Tier fit:** `logic` — the lantern is a placed block whose child lights already change spawning
-conditions; no GUI or renderer. If the pin has no stamped spawner hook, report `blocked(<symbol>)`
-instead of inventing one.
-**In-game assertion:** place a spawner next to a lit lantern and `ctl entities 16 minecraft:zombie`
-must differ with and without the lantern's residual light; parse the type-filtered count, never
-the absence of an error.
+**Family:** the phantom spawn veto (the other spawn family the artefact vetoes and the pin stamps).
+**Gap line:** "Phantoms and village sieges. Upstream also vetoes phantom spawns
+(`PlayerSpawnPhantomsEvent`) … both are slice 2" (§Gaps above).
+**Tier fit:** `logic` — `hook:player_spawn_phantoms` is stamped at this pin and a mega torch in
+range can force the veto; no GUI or renderer. Village sieges (`hook:village_siege`) are the
+companion family for the same gate.
+**In-game assertion:** with a mega torch placed within 64 blocks of an insomniac player in a
+sealed sky box, `ctl entities 16 minecraft:phantom` must be lower than in the same world with the
+torch broken; parse the type-filtered count, and `SELFTEST=phantom` must invert it and end
+`EXIT:1`.

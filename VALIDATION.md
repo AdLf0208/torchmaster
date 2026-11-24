@@ -88,6 +88,28 @@ Full record in [`notes.md`](notes.md) §0.2.3.
 
 Full record in [`notes.md`](notes.md) §0.2.4.
 
+## 0.2.5 — the feral lantern's light quietens a mob spawner (2026-11-24, pin `0a875da`)
+
+| Check | Command | Result |
+|---|---|---|
+| gate | stamped `finalize_spawn` + `EntitiesHost::level` + `LevelRef::brightness` | **passes** (not `blocked`): `hook:finalize_spawn` v1, `contract: cancel`, `spawner`, `spawn_cancelled`, light read 0..=15 |
+| artefact rules | upstream 21.1.14 `FeralFlareLanternBlockEntity.java` / `ModRegistry.java` / `TorchmasterNeoforgeConfig.java` | light **15**, radius **16**, cadence **5**, min target light **10**, cap **255**; the interaction is the light, not a dedicated spawner event |
+| TDD | tests first, then the pure `spawner_light_suppresses` rule | compile-red (`../_shared/evidence/torchmaster/spawner/unit-tdd-red.log`, 8 `E0425`) → **21 passed** (`unit-tdd-green.log`) |
+| tests | `cargo test --offline` | **21 passed**, 0 failed (regenerated `sdk-test.log`) |
+| fmt + lints | `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` | clean, 0 warnings (`spawner/lint.log`) |
+| package | `rm -f Cargo.lock && cargo horizon-mod build` | 0.2.5 `.hmod`, no lock packed (`spawner/ladder.log`) |
+| registry check | `cargo horizon-mod check torchmaster.hmod` | `torchmaster 0.2.5 (native-mod, native-1/0a875da…/e59da90…, for 26.3)`, 43,053 B |
+| fits | `cargo horizon-mod fits torchmaster.hmod --build 0a875da` / `--build 0b14f8a` | `0a875da  made for` / `fits`, both exit 0 (`spawner/build-check-fits.log`) — after avoiding the `SpawnSource::Block` false-fail |
+| gate | `python3 ports/tools/verify-sdk-package.py torchmaster` | **1/1**, including `package matches the tree` |
+| launcher | `launcher-game.sh build torchmaster` | `Compiling torchmaster (1 of 1)`, `native-0a875da-8cdcea15ae53`, `EXIT:0` (`spawner/native-build.log`) |
+| spawner proof | `tools/e2e.sh` phase G | `PASS` + `EXIT:0`: a zombie spawner grew **4** zombies in a dark box, **0** beside a lit lantern; type-filtered `ctl entities 16 minecraft:zombie` (`../_shared/evidence/torchmaster-e2e/e2e.log`) |
+| counterfactual | `SELFTEST=spawner tools/e2e.sh` | `FAIL` + `EXIT:1` (`spawner/e2e-selftest-spawner.log`); `CONTROL=1`, `SELFTEST=1`, `SELFTEST=flare`, `SELFTEST=pearl` all redo `EXIT:1` |
+| carried recipes + loot | `tools/e2e-dialect.sh` (four specs) | `PASS` + `EXIT:0`; `SELFTEST=1` `FAIL` + `EXIT:1` |
+| log gate | `check-e2e-logs.py torchmaster-e2e --strict` / `torchmaster --strict` | `logs=5 ok=5` / `logs=7 ok=7`, both exit 0 |
+| delivered | `torchmaster.hmod` | **43,053 B**, SHA-256 `bf05ad2348e0eb85300fdf6c81dd4d98003bdbb30e69369aee79e3574de49aa8`, 44 entries |
+
+Full record in [`notes.md`](notes.md) §0.2.5.
+
 ## The retired `.hnmod` bundle (pin `1d63e0a`, kept for the record)
 
 | Check | Result |

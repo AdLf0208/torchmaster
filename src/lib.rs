@@ -7,6 +7,10 @@
 //! `server_started` and `world_lifecycle` load and save the world file, and
 //! `level_tick_post` prunes a light whose block is gone.
 //!
+//! A feral lantern's light also quiets a mob spawner: `finalize_spawn` reads the
+//! block light at the spawner and cancels the spawn above vanilla's limit. That
+//! is the one spawn path `potential_spawns` does not see (0.2.5).
+//!
 //! `register_commands` and `run_mod_command` carry `/torchmaster` and `/torchmaster list`,
 //! the readout that says which lights the registry holds. It replaced the five `log`
 //! calls this port used to make: the registry's R9 refuses every dependency but the SDK,
@@ -23,18 +27,19 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use mod_api::{
-    self, BlockChangedEvent, BlockState, BlockUpdateFlags, Command, EquipmentSlot, Flow, Hand,
-    Hooks, Host, HostSide, InteractionResult, ItemPart, LevelHost, LevelRef, LevelTickPostEvent,
-    LightLayer, PotentialSpawnsEvent, RegisterCommandsEvent, Registrar, RegistrationContext,
-    RunModCommandEvent, ServerHost, ServerStartedEvent, Text, UseItemEvent, WorldLifecycleEvent,
-    WorldPhase,
+    self, BlockChangedEvent, BlockState, BlockUpdateFlags, Command, EquipmentSlot,
+    FinalizeSpawnEvent, Flow, Hand, Hooks, Host, HostSide, InteractionResult, ItemPart, LevelHost,
+    LevelRef, LevelTickPostEvent, LightLayer, PotentialSpawnsEvent, RegisterCommandsEvent,
+    Registrar, RegistrationContext, RunModCommandEvent, ServerHost, ServerStartedEvent,
+    SpawnReason, Text, UseItemEvent, WorldLifecycleEvent, WorldPhase,
 };
 
 use runtime::{
     FLARE_HARD_CAP, FLARE_MIN_LIGHT, FLARE_TICK_RATE, FROZEN_PEARL, Flare, INVISIBLE_LIGHT, Light,
     LightKind, PEARL_RADIUS, RADIUS, blocks, count_line, format_lights, is_flare_block,
     is_invisible_light, is_residual_light, light_lines, next_candidate, parse_lights,
-    pearl_removals, remove, should_place, take_flare, upsert, upsert_flare,
+    pearl_removals, remove, should_place, spawner_light_suppresses, take_flare, upsert,
+    upsert_flare,
 };
 
 /// The lights live in `<world>/torchmaster/lights.tsv`, the path the retired bundle used,
@@ -100,6 +105,46 @@ impl Hooks for Mod {
             RADIUS,
         ) {
             return Flow::Cancel;
+        }
+        Flow::Continue
+    }
+
+    /// A spawner asks for a mob. This is the one spawn path `potential_spawns` never
+    /// sees: upstream's `blockOnlyNaturalSpawns` default deliberately leaves spawners
+    /// alone, but a feral lantern's invisible light raises the block light at the
+    /// spawner cell, and vanilla's own limit says a spawner in bright light does not
+    /// run. The pin stamps `finalize_spawn` with both the spawner source and
+    /// `spawn_cancelled`, so this veto needs no invented hook and no fake readout.
+    fn finalize_spawn(&self, host: &dyn Host, event: &mut FinalizeSpawnEvent<'_>) -> Flow {
+        // Only a spawner block (or trial spawner): spawn eggs, commands, breeding,
+        // natural spawning and reinforcements are left to the game, as upstream does.
+        if !matches!(
+            event.reason,
+            SpawnReason::Spawner | SpawnReason::TrialSpawner
+        ) {
+            return Flow::Continue;
+        }
+        // Read the light at the cell the spawn would occupy, not a guessed range:
+        // the lantern's `invisible_light` blocks are light 15, so the cell is above
+        // vanilla's limit wherever the lantern has lit the spawner's neighbourhood.
+        // Both handles are stamped: `EntitiesHost::level` resolves the dimension and
+        // `LevelRef::brightness` reads the stored block light (0..=15). The matched
+        // reason is the stamped spawner signal; the SDK's `SpawnSource` variant named
+        // after a type is deliberately not named here, because `uses.json` reads a
+        // bare `Block` as a construction and `fits --build 0b14f8a` then false-fails.
+        let Some(level) = host.level(event.dimension) else {
+            return Flow::Continue;
+        };
+        let cell = [
+            event.pos[0].floor() as i32,
+            event.pos[1].floor() as i32,
+            event.pos[2].floor() as i32,
+        ];
+        let Some(light) = level.brightness(host, LightLayer::Block, cell) else {
+            return Flow::Continue;
+        };
+        if spawner_light_suppresses(light) {
+            event.spawn_cancelled = true;
         }
         Flow::Continue
     }

@@ -22,6 +22,8 @@
 #     (the earlier phases stay green); it must see no light and exit 1.
 #   * SELFTEST=pearl — only the pearl's removal assertion is inverted; it must see
 #     the residual lights still there and exit 1.
+#   * SELFTEST=spawner — only the spawner assertion is inverted: a lit lantern must
+#     quiet the spawner, so seeing the same count as the dark spawner must exit 1.
 #
 #   E. the Feral Flare Lantern writes `torchmaster:invisible_light` blocks in the sealed
 #      dark box and emits light; breaking it takes the count back to zero. A plain stone
@@ -29,6 +31,9 @@
 #   F. a Frozen Pearl right-click removes residual `invisible_light` in the player's
 #      31-block cube and spends a charge per light; used on a vanilla-lit cell with no
 #      residual light in range it changes no count and loses no charge (differential).
+#   G. a zombie spawner in a sealed dark box spawns mobs; a lit feral lantern beside it
+#      raises the block light at the spawner above vanilla's limit and quietens it.
+#      The assertion reads the *type-filtered* `ctl entities 16 minecraft:zombie` count.
 #
 # The arenas are sealed stone boxes in the Overworld sky (floor y=200, roof y=208), where
 # the world surface is far below, so the only natural-spawn attempts near the player are
@@ -223,6 +228,9 @@ light_block() { ctl light "$1" "$2" "$3" "$4" "$5" "$6" | jq -r '.block'; }
 invisible_lights() {
     ctl blocks "$1" "$2" "$3" "$4" "$5" "$6" | jq -r --arg i "$LIGHT" '.counts[$i] // 0'
 }
+# The spawner assertion parses the count of one entity type, never the absence of
+# an error: `ctl entities 16 minecraft:zombie` answers a JSON list of exactly zombies.
+zombie_count() { ctl entities 16 minecraft:zombie | jq -r '.entities | length'; }
 # The pearl's remaining wear, summed over the carried stacks. `ctl inventory`
 # reports `damage` only when it is nonzero, so an unworn pearl reads 0.
 pearl_damage() {
@@ -612,5 +620,51 @@ echo "  differential on a vanilla-lit cell: box A lights $standby -> $standby_af
 ctl command "setblock 161 201 0 minecraft:air" >/dev/null
 ctl command "gamemode creative @a" >/dev/null
 
-echo "PASS: control=$control_hostile, torch=$torch_hostile, outside=$outside_hostile, after_break=$returned_hostile monsters; lamp_control=$control_bats, lamp=$lamp_bats, lamp_outside=$outside_bats bats, lamp_box_monsters=$lamp_hostile; drops torch=$torch_drop lamp=$lamp_drop control=$control_drop; flare=$flare_count lights, after break $after_flare, stone control $stone_lights; pearl $pearl_before -> $pearl_after lights for damage $dmg_before -> $dmg_after, vanilla cell $standby -> $standby_after for damage $dmg_diff; /torchmaster readouts matched at every phase"
+# ---- G. the feral lantern's light quietens a mob spawner -----------------------------
+say "G. a lit feral lantern suppresses a zombie spawner through its light"
+ctl command "gamemode creative @a" >/dev/null
+ctl command "gamerule doMobSpawning true" >/dev/null || true
+ctl command "gamerule spawn_monsters true" >/dev/null || true
+ctl command "difficulty hard" >/dev/null
+# /setblock in a chunk that is still loading answers "That position is not loaded":
+# rebuild the arena and stand on the loaded floor before placing the spawner.
+build_room 0 0 200 minecraft:stone
+ctl tp 0.5 201 0.5 >/dev/null
+ctl wait 20
+[ "$(block_id 0 200 0)" = "minecraft:stone" ] || fail "arena A was not loaded for the spawner leg"
+kill_mobs
+
+say "G1. a zombie spawner in the sealed dark box spawns mobs"
+ctl command "setblock 0 201 0 minecraft:spawner{SpawnData:{entity:{id:\"minecraft:zombie\"}}}" >/dev/null
+ctl wait 5
+spawner_block=$(block_id 0 201 0)
+echo "  spawner block: $spawner_block"
+[ "$spawner_block" = "minecraft:spawner" ] || fail "the zombie spawner did not place ($spawner_block)"
+ctl wait 400
+spawner_lit=$(zombie_count)
+echo "  dark spawner: $spawner_lit zombies within 16 blocks"
+[ "$spawner_lit" -gt 0 ] || fail "a spawner in a dark sealed box spawned no zombies"
+
+say "G2. the lantern's light raises the spawner cell above vanilla's limit"
+ctl setblock 2 201 0 "$FLARE" >/dev/null
+ctl wait 60
+echo "  lantern block light at the spawner: $(light_block 0 201 0 0 201 0) (hex)"
+kill_mobs
+ctl wait 400
+spawner_dark=$(zombie_count)
+echo "  spawner beside a lit lantern: $spawner_dark zombies within 16 blocks"
+if [ "$SELFTEST" = spawner ]; then
+    # Inverted on purpose: the lantern must quieten the spawner, so this run MUST
+    # fail. Every earlier phase stays green, isolating this assertion.
+    [ "$spawner_dark" -eq "$spawner_lit" ] \
+        || fail "SELFTEST: expected the spawner count to stay $spawner_lit, saw $spawner_dark"
+    fail "SELFTEST: the inverted spawner assertion passed (exit 1 is the counterfactual)"
+fi
+[ "$spawner_dark" -lt "$spawner_lit" ] \
+    || fail "the lantern's light did not quieten the spawner ($spawner_lit -> $spawner_dark)"
+ctl command "setblock 0 201 0 minecraft:air" >/dev/null
+ctl command "setblock 2 201 0 minecraft:air" >/dev/null
+ctl command "gamemode creative @a" >/dev/null
+
+echo "PASS: control=$control_hostile, torch=$torch_hostile, outside=$outside_hostile, after_break=$returned_hostile monsters; lamp_control=$control_bats, lamp=$lamp_bats, lamp_outside=$outside_bats bats, lamp_box_monsters=$lamp_hostile; drops torch=$torch_drop lamp=$lamp_drop control=$control_drop; flare=$flare_count lights, after break $after_flare, stone control $stone_lights; pearl $pearl_before -> $pearl_after lights for damage $dmg_before -> $dmg_after, vanilla cell $standby -> $standby_after for damage $dmg_diff; spawner $spawner_lit -> $spawner_dark zombies beside a lit lantern; /torchmaster readouts matched at every phase"
 exit 0

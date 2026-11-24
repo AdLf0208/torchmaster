@@ -15,12 +15,14 @@ is the native half.
 |---|---|
 | `torchmaster:megatorch` | vetoes natural spawns of every non-friendly category (vanilla: `monster`) in a cube of 64 around it |
 | `torchmaster:dreadlamp` | vetoes natural spawns of the friendly categories except `misc` in a cube of 64 |
-| `torchmaster:feral_flare_lantern` | writes `torchmaster:invisible_light` blocks (light 15) into empty, dark cells within 16 blocks, every 5 ticks, up to 255; breaking it removes them |
+| `torchmaster:feral_flare_lantern` | writes `torchmaster:invisible_light` blocks (light 15) into empty, dark cells within 16 blocks, every 5 ticks, up to 255; breaking it removes them; that light also quietens a mob spawner whose cell it reaches |
 | `torchmaster:frozen_pearl` | right-click clears residual `invisible_light` blocks in a 31×31×31 cube around the player, spending one of its 1024 charges per light |
 
-The veto covers the **natural spawn path only**, as the original's
-`blockOnlyNaturalSpawns` default asks: spawn eggs, breeding, spawners and
-commands are untouched.
+The two blocking lights veto the **natural spawn path only**, as the original's
+`blockOnlyNaturalSpawns` default asks: spawn eggs, breeding and commands are
+untouched. A mob spawner is also left alone — unless a feral lantern's light
+raises the block light at its cell above vanilla's limit (7), in which case the
+spawn is cancelled.
 
 `/torchmaster` prints how many blocking lights the world's registry holds, and
 `/torchmaster list` prints each light's dimension, position and kind; a file the
