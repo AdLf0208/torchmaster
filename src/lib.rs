@@ -32,15 +32,15 @@ use mod_api::{
     LevelRef, LevelTickPostEvent, LightLayer, PhantomSpawnResult, PlayerSpawnPhantomsEvent,
     PotentialSpawnsEvent, RegisterCommandsEvent, Registrar, RegistrationContext,
     RunModCommandEvent, ServerHost, ServerStartedEvent, SpawnReason, Text, UseItemEvent,
-    WorldLifecycleEvent, WorldPhase,
+    VillageSiegeEvent, WorldLifecycleEvent, WorldPhase,
 };
 
 use runtime::{
     FLARE_HARD_CAP, FLARE_MIN_LIGHT, FLARE_TICK_RATE, FROZEN_PEARL, Flare, INVISIBLE_LIGHT, Light,
     LightKind, PEARL_RADIUS, RADIUS, blocks, count_line, format_lights, is_flare_block,
     is_invisible_light, is_residual_light, light_lines, next_candidate, parse_lights,
-    pearl_removals, phantom_veto, remove, should_place, spawner_light_suppresses, take_flare,
-    upsert, upsert_flare,
+    pearl_removals, phantom_veto, remove, should_place, siege_veto, spawner_light_suppresses,
+    take_flare, upsert, upsert_flare,
 };
 
 /// The lights live in `<world>/torchmaster/lights.tsv`, the path the retired bundle used,
@@ -133,6 +133,29 @@ impl Hooks for Mod {
             return Some(PhantomSpawnResult::Deny);
         }
         None
+    }
+
+    /// Upstream's `VillageSiegeEvent` handler (`TorchmasterEventHandler.java:131-149`)
+    /// denies the siege when `shouldBlockVillageZombieRaid(attemptedSpawnPos)` is
+    /// true. The event names the dimension and the attempted spawn position
+    /// directly, so this companion veto needs no player/level indirection and no
+    /// guessed range: the pure rule checks the same registry with the Mega
+    /// Torch's `megaTorchRadius` cube, and a Dread Lamp never answers. Returning
+    /// `Flow::Cancel` sets the stamped `cancelled` field, which stops the siege.
+    fn village_siege(&self, _host: &mut dyn ServerHost, event: &mut VillageSiegeEvent<'_>) -> Flow {
+        // The attempted position is an entity spawn position (x/z at the block
+        // centre, y at the feet block); flooring recovers the whole block cell
+        // that `runtime::in_range` reproduces upstream's cubic test against.
+        let pos = [
+            event.attempted_pos[0].floor() as i32,
+            event.attempted_pos[1].floor() as i32,
+            event.attempted_pos[2].floor() as i32,
+        ];
+        let store = self.store.lock().expect(LOCK);
+        if siege_veto(event.dimension, pos, &store.lights) {
+            return Flow::Cancel;
+        }
+        Flow::Continue
     }
 
     /// A spawner asks for a mob. This is the one spawn path `potential_spawns` never

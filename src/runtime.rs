@@ -168,6 +168,34 @@ pub fn phantom_veto(dimension: &str, pos: [i32; 3], lights: &[Light]) -> bool {
     blocks(dimension, "monster", pos, lights, PHANTOM_RADIUS)
 }
 
+/// The radius upstream's `onVillageSiege` uses.
+///
+/// `MegatorchEntityBlockingLight.shouldBlockVillageZombieRaid` calls the same
+/// cubic `IDistanceLogic.Cubic.isPositionInRange` as the natural-spawn veto,
+/// with `megaTorchRadius` (default 64) — not a separate siege setting.
+/// Source: `MegatorchEntityBlockingLight.java:35-38`,
+/// `TorchmasterNeoforgeConfig.java:67-70`,
+/// `TorchmasterEventHandler.java:131-149`.
+pub const SIEGE_RADIUS: i32 = RADIUS;
+
+/// Whether a village siege that found `pos` is vetoed by any light in `lights`.
+///
+/// Upstream's `FilteredLightManager.shouldBlockVillageZombieRaid` ORs every
+/// registered light's `shouldBlockVillageZombieRaid(pos)`; the Mega Torch's is
+/// the cubic radius check (with **no** entity-type filter — a siege is by
+/// definition a zombie raid) and the Dread Lamp's returns `false`
+/// unconditionally (`DreadLampEntityBlockingLight.java:35-39`). The port keeps
+/// that asymmetry: only a Mega Torch in the same dimension and within
+/// `SIEGE_RADIUS` vetoes, regardless of the attempted spawn's category.
+#[must_use]
+pub fn siege_veto(dimension: &str, pos: [i32; 3], lights: &[Light]) -> bool {
+    lights.iter().any(|light| {
+        light.dimension == dimension
+            && light.kind == LightKind::MegaTorch
+            && in_range(light.pos, pos, SIEGE_RADIUS)
+    })
+}
+
 /// Insert `light`, replacing a light already at the same dimension and
 /// position (a mega torch swapped for a dread lamp keeps one entry).
 pub fn upsert(lights: &mut Vec<Light>, light: Light) {
@@ -949,5 +977,44 @@ mod tests {
         )];
         assert!(!phantom_veto("minecraft:overworld", [160, 201, 0], &lights));
         assert!(!phantom_veto("minecraft:the_end", [0, 201, 0], &lights));
+    }
+
+    // ---- the village-siege veto (0.2.7) ---------------------------------------------
+
+    #[test]
+    fn a_mega_torch_within_the_artefact_radius_vetoes_a_village_siege() {
+        // Upstream's `onVillageSiege` asks `shouldBlockVillageZombieRaid(pos)`;
+        // on the Mega Torch that is the same cubic radius check as the natural
+        // spawn veto, with `megaTorchRadius` (default 64) and no category filter.
+        assert_eq!(SIEGE_RADIUS, 64);
+        let lights = vec![light(
+            "minecraft:overworld",
+            [0, 201, 0],
+            LightKind::MegaTorch,
+        )];
+        assert!(siege_veto("minecraft:overworld", [0, 201, 0], &lights));
+        assert!(siege_veto("minecraft:overworld", [40, 201, 40], &lights));
+    }
+
+    #[test]
+    fn a_dread_lamp_never_vetoes_a_village_siege() {
+        // `DreadLampEntityBlockingLight.shouldBlockVillageZombieRaid` returns false.
+        let lights = vec![light(
+            "minecraft:overworld",
+            [0, 201, 0],
+            LightKind::DreadLamp,
+        )];
+        assert!(!siege_veto("minecraft:overworld", [0, 201, 0], &lights));
+    }
+
+    #[test]
+    fn a_torch_out_of_range_or_in_another_dimension_does_not_veto_a_siege() {
+        let lights = vec![light(
+            "minecraft:overworld",
+            [0, 201, 0],
+            LightKind::MegaTorch,
+        )];
+        assert!(!siege_veto("minecraft:overworld", [160, 201, 0], &lights));
+        assert!(!siege_veto("minecraft:the_end", [0, 201, 0], &lights));
     }
 }

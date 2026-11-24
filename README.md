@@ -21,11 +21,13 @@ is the native half.
 The two blocking lights veto the **natural spawn path only**, as the original's
 `blockOnlyNaturalSpawns` default asks: spawn eggs, breeding and commands are
 untouched. A Mega Torch within 64 blocks also stops phantoms from spawning near
-an insomniac player — upstream's other veto (`PlayerSpawnPhantomsEvent`), which
-does not go through the natural-spawn path. A Dread Lamp does not: phantoms are
-monsters, and the lamp vetoes only the friendly categories. A mob spawner is also
-left alone — unless a feral lantern's light raises the block light at its cell
-above vanilla's limit (7), in which case the spawn is cancelled.
+an insomniac player and stops zombie sieges of villages — upstream's other two
+vetoes (`PlayerSpawnPhantomsEvent` and `VillageSiegeEvent`), which do not go
+through the natural-spawn path. A Dread Lamp does neither: phantoms and siege
+zombies are monsters, and the lamp vetoes only the friendly categories. A mob
+spawner is also left alone — unless a feral lantern's light raises the block
+light at its cell above vanilla's limit (7), in which case the spawn is
+cancelled.
 
 `/torchmaster` prints how many blocking lights the world's registry holds, and
 `/torchmaster list` prints each light's dimension, position and kind; a file the
@@ -37,9 +39,9 @@ what the removed `log` calls used to say (see `notes.md` §0.2.2).
 ```
 horizon-mod.toml   the manifest and the only identity (api 0.2, [native] pin)
 Cargo.toml         horizon-mod-api from .horizon/sdk/ — the only dependency (R9)
-src/runtime.rs     the pure engine: kinds, cubic range, light/flare registries, TSV file, readout, pearl cube/charges, phantom veto rule (24 tests)
+src/runtime.rs     the pure engine: kinds, cubic range, light/flare registries, TSV file, readout, pearl cube/charges, phantom and village-siege veto rules (27 tests)
 src/lib.rs         the one impl Hooks: register, potential_spawns,
-                   player_spawn_phantoms, finalize_spawn, block_changed,
+                   player_spawn_phantoms, village_siege, finalize_spawn, block_changed,
                    server_started, world_lifecycle, level_tick_post,
                    register_commands, run_mod_command; plus the frozen pearl's
                    ItemPart (use_item) attached in register

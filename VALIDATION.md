@@ -131,6 +131,28 @@ Full record in [`notes.md`](notes.md) §0.2.5.
 
 Full record in [`notes.md`](notes.md) §0.2.6.
 
+## 0.2.7 — the village-siege veto (2026-11-24, pin `0a875da`)
+
+| Check | Command | Result |
+|---|---|---|
+| gate | stamped `hook:village_siege` v1, `contract: cancel`, fields `dimension`/`player`/`attempted_pos`/`cancelled` | **passes** (`surface.json` hash `236965df1ff2…`); cancel at `tryToSetupSiege` abandons the raid before any zombie spawns; no `Block` variant named (`../_shared/evidence/torchmaster/siege/final-check-fits.log`) |
+| artefact rules | upstream 21.1.14 `TorchmasterEventHandler.java:131-149`, `MegatorchEntityBlockingLight.java:35-38`, `DreadLampEntityBlockingLight.java:35-39`, `TorchmasterNeoforgeConfig.java:62-70` | `blockVillageSieges` default **true**; `shouldBlockVillageZombieRaid` = Mega Torch's cubic `megaTorchRadius` (**64**) with no entity filter; Dread Lamp always false |
+| TDD | tests first, then the pure `siege_veto` / `SIEGE_RADIUS` | compile-red (`../_shared/evidence/torchmaster/siege/unit-tdd-red.log`, **6 `E0425`**) → **27 passed** (`unit-tdd-green.log`) |
+| tests | `cargo test --offline` | **27 passed**, 0 failed (`sdk-test.log` regenerated after the final build) |
+| fmt + lints | `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` | clean, 0 warnings (`siege/lint.log`) |
+| package | `cargo horizon-mod build` | 0.2.7 `.hmod`, no lock packed (`siege/final-build.log`) |
+| registry check | `cargo horizon-mod check torchmaster.hmod` | `torchmaster 0.2.7 (native-mod, native-1/0a875da…/e59da90…, for 26.3)`, 45,716 B (`siege/final-check-fits.log`) |
+| fits | `cargo horizon-mod fits torchmaster.hmod --build 0a875da` / `--build 0b14f8a` | `0a875da  made for` / `fits`, both exit 0 (`siege/final-check-fits.log`) |
+| gate | `python3 ports/tools/verify-sdk-package.py torchmaster` | **1/1**, including `package matches the tree` (`siege/gate.log`) |
+| launcher | `launcher-game.sh build torchmaster` (stale `native-*` tags removed first) | `Compiling torchmaster (1 of 1)`, `native-0a875da-dd00bc8f3a40`, `EXIT:0` (`siege/native-build.log`) |
+| siege proof | `tools/e2e.sh` phase I | `PASS` + `EXIT:0`: an open-sky village grew **3** zombies in the control window, **0** after a Mega Torch within the artefact's 64-block radius; type-filtered `ctl entities 16 minecraft:zombie` (`../_shared/evidence/torchmaster-e2e/e2e.log`) |
+| counterfactual | `SELFTEST=siege tools/e2e.sh` | `FAIL` + `EXIT:1` (`torchmaster-e2e/siege/e2e-selftest-siege.log`); `CONTROL=1`, `SELFTEST=1`, `SELFTEST=flare`, `SELFTEST=pearl`, `SELFTEST=spawner`, `SELFTEST=phantom` all redo `EXIT:1` |
+| carried recipes + loot | `tools/e2e-dialect.sh` (four specs) | `PASS` + `EXIT:0`; `SELFTEST=1` `FAIL` + `EXIT:1` |
+| log gate | `check-e2e-logs.py torchmaster-e2e --strict` / `torchmaster --strict` | `logs=7 ok=7` / `logs=7 ok=7`, both exit 0 |
+| delivered | `torchmaster.hmod` | **45,716 B**, SHA-256 `98c23932949e573de647256284a45cd7687ec97d6d9281ef7d37ba796a7e7ff6`, 44 entries |
+
+Full record in [`notes.md`](notes.md) §0.2.7.
+
 ## The retired `.hnmod` bundle (pin `1d63e0a`, kept for the record)
 
 | Check | Result |

@@ -26,6 +26,8 @@
 #     quiet the spawner, so seeing the same count as the dark spawner must exit 1.
 #   * SELFTEST=phantom — only the phantom assertion is inverted: a Mega Torch in
 #     range must stop phantoms near an insomniac player, so seeing any must exit 1.
+#   * SELFTEST=siege — only the village-siege assertion is inverted: a Mega Torch
+#     in range must stop the zombie raid, so seeing as many as the control must exit 1.
 #
 #   E. the Feral Flare Lantern writes `torchmaster:invisible_light` blocks in the sealed
 #      dark box and emits light; breaking it takes the count back to zero. A plain stone
@@ -40,6 +42,11 @@
 #      grows phantoms; a Mega Torch within 64 blocks stops them through the stamped
 #      `player_spawn_phantoms` veto. The assertion parses the type-filtered
 #      `ctl entities 48 minecraft:phantom` count, never an absence of error.
+#   I. a village (claimed bells + villagers) under an open night sky gets a zombie
+#      siege; a Mega Torch within the artefact's `megaTorchRadius` of the attempted
+#      spawn stops it through the stamped `village_siege` veto. The assertion parses
+#      the type-filtered `ctl entities 16 minecraft:zombie` count, never an absence
+#      of error. Dropping the clock to noon and back resets the siege for a retry.
 #
 # The arenas are sealed stone boxes in the Overworld sky (floor y=200, roof y=208), where
 # the world surface is far below, so the only natural-spawn attempts near the player are
@@ -244,6 +251,15 @@ zombie_count() { ctl entities 16 minecraft:zombie | jq -r '.entities | length'; 
 phantom_count() {
     ctl entities 48 minecraft:phantom \
         | jq -r '[.entities[] | select((.health // 0) > 0)] | length'
+}
+villager_count() { ctl entities 48 minecraft:villager | jq -r '.entities | length'; }
+# A siege only sets up once per night: dropping the clock to noon makes
+# sky_darken < 4, which clears the siege's tonight/set_up state, and returning
+# to midnight lets the 1-in-10 roll run again. Used to retry the control leg.
+siege_night() {
+    ctl time 6000 >/dev/null
+    ctl wait 10 >/dev/null
+    ctl time 18000 >/dev/null
 }
 # Wait up to `max` ticks for a phantom, printing the waited ticks. Returns 1 if
 # none appeared; the caller still reads the count so a zero is never a vacuous
@@ -780,5 +796,83 @@ fi
     || fail "the Mega Torch did not reduce phantom spawns ($control_phantoms -> $torch_phantoms)"
 ctl command "setblock 490 208 0 minecraft:air" >/dev/null
 
-echo "PASS: control=$control_hostile, torch=$torch_hostile, outside=$outside_hostile, after_break=$returned_hostile monsters; lamp_control=$control_bats, lamp=$lamp_bats, lamp_outside=$outside_bats bats, lamp_box_monsters=$lamp_hostile; drops torch=$torch_drop lamp=$lamp_drop control=$control_drop; flare=$flare_count lights, after break $after_flare, stone control $stone_lights; pearl $pearl_before -> $pearl_after lights for damage $dmg_before -> $dmg_after, vanilla cell $standby -> $standby_after for damage $dmg_diff; spawner $spawner_lit -> $spawner_dark zombies beside a lit lantern; phantom $control_phantoms -> $torch_phantoms near an insomniac player; /torchmaster readouts matched at every phase"
+# ---- I. a Mega Torch vetoes a village siege -----------------------------------------
+# The artefact's `onVillageSiege` asks `shouldBlockVillageZombieRaid(attemptedPos)`:
+# a Mega Torch's own cubic radius (megaTorchRadius 64, no category filter), never
+# the Dread Lamp's (which always returns false). The open-sky arena carries a
+# row of claimed bells (village centres) so the player's section and the 24-40
+# block-away siege spawn cells are both "in a village"; a roof would make
+# sky_darken < 4 and the siege tick would return before any attempt.
+say "I. the village-siege veto: a Mega Torch in range stops the zombie raid"
+ctl command "gamemode creative @a" >/dev/null
+ctl command "gamerule doDaylightCycle false" >/dev/null || true
+ctl command "gamerule doMobSpawning true" >/dev/null || true
+ctl command "gamerule spawn_monsters true" >/dev/null || true
+ctl command "difficulty hard" >/dev/null
+ctl time 18000 >/dev/null
+ctl tp 640.5 201 0.5 >/dev/null
+ctl wait 60 >/dev/null
+ctl command "fill 608 200 -32 672 200 32 minecraft:stone" >/dev/null
+ctl command "fill 608 201 -32 608 208 32 minecraft:stone" >/dev/null
+ctl command "fill 672 201 -32 672 208 32 minecraft:stone" >/dev/null
+ctl command "fill 608 201 -32 672 201 -32 minecraft:stone" >/dev/null
+ctl command "fill 608 201 32 672 201 32 minecraft:stone" >/dev/null
+ctl wait 10 >/dev/null
+ctl tp 640.5 201 0.5 >/dev/null
+ctl wait 10
+[ "$(block_id 640 200 0)" = "minecraft:stone" ] || fail "siege arena floor was not built"
+for dx in -32 -16 0 16 32; do
+    x=$((640 + dx))
+    ctl command "setblock $x 201 -2 minecraft:bell" >/dev/null
+    ctl summon minecraft:villager "$x.5" 201 -1 >/dev/null
+done
+echo "  village: villagers=$(villager_count), bell at centre=$(block_id 640 201 -2)"
+[ "$(villager_count)" -ge 1 ] || fail "no villager was summoned for the siege arena"
+[ "$(block_id 640 201 -2)" = "minecraft:bell" ] || fail "the village bell did not place"
+# Villagers need time to claim the bells as meeting points (village centres).
+ctl wait 900 >/dev/null
+
+say "I1. control: a village under an open night sky gets a zombie raid"
+control_siege=0
+for window in 1 2 3; do
+    ctl command "kill @e[type=minecraft:zombie]" >/dev/null || true
+    ctl wait 3 >/dev/null
+    siege_night
+    waited=0
+    while [ "$waited" -lt 900 ]; do
+        ctl wait 100 >/dev/null
+        waited=$((waited + 100))
+        control_siege=$(zombie_count)
+        [ "$control_siege" -gt 0 ] && break
+    done
+    echo "  control window $window: $control_siege zombies within 16 blocks after $waited ticks"
+    [ "$control_siege" -gt 0 ] && break
+done
+[ "$control_siege" -gt 0 ] || fail "no zombie raid appeared in the village control arena"
+
+say "I2. a Mega Torch within the artefact's 64-block radius vetoes the raid"
+ctl setblock 640 201 4 "$MEGA" >/dev/null
+ctl wait 3
+[ "$(block_id 640 201 4)" = "$MEGA" ] || fail "the siege-veto Mega Torch did not place"
+torch_state=$(readout "/torchmaster")
+echo "  /torchmaster -> $torch_state"
+echo "$torch_state" | grep -q "1 megatorch" || fail "the siege-veto torch is not in the registry: '$torch_state'"
+ctl command "kill @e[type=minecraft:zombie]" >/dev/null || true
+ctl wait 3 >/dev/null
+siege_night
+# With the torch registered, every siege setup that finds a spawn position is
+# cancelled at the stamped hook, so no raid starts in a full control window.
+ctl wait 1800 >/dev/null
+torch_siege=$(zombie_count)
+echo "  with the torch: $torch_siege zombies within 16 blocks (control $control_siege)"
+if [ "$SELFTEST" = siege ]; then
+    [ "$torch_siege" -ge "$control_siege" ] \
+        || fail "SELFTEST: expected the raid to continue despite the torch, saw $torch_siege vs $control_siege"
+    fail "SELFTEST: the inverted village-siege assertion passed (exit 1 is the counterfactual)"
+fi
+[ "$torch_siege" -lt "$control_siege" ] \
+    || fail "the Mega Torch did not reduce siege zombies ($control_siege -> $torch_siege)"
+ctl command "setblock 640 201 4 minecraft:air" >/dev/null
+
+echo "PASS: control=$control_hostile, torch=$torch_hostile, outside=$outside_hostile, after_break=$returned_hostile monsters; lamp_control=$control_bats, lamp=$lamp_bats, lamp_outside=$outside_bats bats, lamp_box_monsters=$lamp_hostile; drops torch=$torch_drop lamp=$lamp_drop control=$control_drop; flare=$flare_count lights, after break $after_flare, stone control $stone_lights; pearl $pearl_before -> $pearl_after lights for damage $dmg_before -> $dmg_after, vanilla cell $standby -> $standby_after for damage $dmg_diff; spawner $spawner_lit -> $spawner_dark zombies beside a lit lantern; phantom $control_phantoms -> $torch_phantoms near an insomniac player; siege $control_siege -> $torch_siege zombies in the village; /torchmaster readouts matched at every phase"
 exit 0

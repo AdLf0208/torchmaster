@@ -1,10 +1,11 @@
 id = "torchmaster"
 name = "Torchmaster"
-version = "0.2.6"
+version = "0.2.7"
 description = """Torchmaster for Horizon: the Mega Torch keeps hostile monsters from spawning
 naturally in a cube of 64 blocks around it, and the Dread Lamp does the same for passive animals
 like squids, bats and ocelots. A Mega Torch in range also stops phantoms from spawning near an
-insomniac player, the other veto upstream declares. The Feral Flare Lantern writes invisible light
+insomniac player and stops zombie sieges of villages, the other two vetoes upstream declares.
+The Feral Flare Lantern writes invisible light
 blocks into empty, dark cells around itself and removes them when it breaks; that light also
 quiets a mob spawner whose cell it reaches, above vanilla's light limit. The Frozen Pearl clears
 those residual lights in a 31-block cube around the player, spending one of its 1024 charges per

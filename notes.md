@@ -5,12 +5,13 @@ Ported from **Torchmaster** (`torchmaster`, MIT, Xalcon/TorchMaster;
 Minecraft 26.3 on Horizon pin `1d63e0a5` (mixins `5a64af93`). Local-only until
 the maintainer approves publishing (ARCHITECTURE.md §8, licence rank 0).
 
-Status: **ported-partial — SDK package 0.2.6 (mega torch + dread lamp natural-spawn
-veto, the phantom veto, the feral lantern's invisible light and spawner quietening,
-and the frozen pearl's residual-light cleanup)**. The pre-spawn veto that blocked
-the port at `41f822b` is now expressible through `potential_spawns` v1 (API 388);
-the probe and the in-game run are recorded below. The phantom veto (0.2.6) uses
-the separately stamped `player_spawn_phantoms` hook.
+Status: **ported-partial — SDK package 0.2.7 (mega torch + dread lamp natural-spawn
+veto, the phantom veto, the village-siege veto, the feral lantern's invisible light
+and spawner quietening, and the frozen pearl's residual-light cleanup)**. The
+pre-spawn veto that blocked the port at `41f822b` is now expressible through
+`potential_spawns` v1 (API 388); the probe and the in-game run are recorded below.
+The phantom veto (0.2.6) uses the separately stamped `player_spawn_phantoms` hook;
+the village-siege veto (0.2.7) uses the stamped `village_siege` hook (API 389).
 
 **Format (2026-11-18):** the live port is the flat **SDK package** at nightly
 `0b14f8a` (mixins `e59da90`, API `0.2`) — one `.hmod` with `horizon-mod.toml`,
@@ -1129,3 +1130,135 @@ siege's own radius may differ.
 sky box and assert the type-filtered `ctl entities 16 minecraft:zombie` count is lower than with
 the torch broken; parse the count, never an absence of error, and make `SELFTEST=siege` invert it
 and end `EXIT:1`.
+
+## 0.2.7 (2026-11-24) — the village-siege veto
+
+Pin **`0a875da91dbb0fdcb7ba8c42c11341aa229af51a`** (mixins `e59da909…`), registry entry ours on
+`main` (0.2.6 staged on PR #1807), so this is an **Update** to **0.2.7**. Class `content`, tier
+`logic`; the logic+machines shape is unchanged: one pure rule in `runtime.rs`, one `Hooks` method in
+`src/lib.rs`, no renderer and no new crate. R9 holds: only the `horizon-mod-api` path dep, no
+`[workspace]`, no packed `Cargo.lock`.
+
+### The hook stamp (read, not assumed)
+
+`ports/_shared/sdk/0a875da/surface.json`:
+
+| Fact | Measured value |
+|---|---|
+| hook | `hook:village_siege`, hash `236965df1ff213c3cffe0b2b87f30181`, **v1**, side server, `contract: cancel`, `cancellable: true` |
+| engine target | `horizon_client::game::native_hooks::native_village_siege::Game<'_>::native_village_siege` |
+| event fields | `dimension: &str`, `player: u128`, `attempted_pos: [f64; 3]` (the spawn position the siege found), `cancelled: bool` |
+| method | `fn village_siege(&self, host: &mut dyn ServerHost, event: &mut VillageSiegeEvent<'_>) -> Flow` |
+| the veto channel | `Flow::Cancel` sets `cancelled`; the game calls this once at `tryToSetupSiege`, before any zombie is spawned, and abandons the raid when cancelled (pin `game/raids.rs:1367-1411`) |
+
+No hook was invented and no cancel flag faked. Only the stamped `VillageSiegeEvent` is named in the
+new code; `uses.json` gains no false-failing `handle:Block::new`, and both `fits` lines are green.
+
+### What the artefact declares (read, not inferred)
+
+Source: the upstream clone at `ports/_shared/upstream/torchmaster` commit
+`a11226c866bf4e9f0695621db5971418dffe3014` (21.1.14, the installed version's tag), files
+`common/.../events/TorchmasterEventHandler.java:131-149`,
+`logic/entityblocking/megatorch/MegatorchEntityBlockingLight.java:35-38`,
+`logic/entityblocking/dreadlamp/DreadLampEntityBlockingLight.java:35-39`,
+`logic/entityblocking/FilteredLightManager.java:36-47` and
+`neoforge/.../TorchmasterNeoforgeConfig.java:62-70`.
+
+| Rule | Measured value | Source |
+|---|---|---|
+| the gate | `blockVillageSieges` default **true**; port is config-free, so always on | `TorchmasterNeoforgeConfig.java:62-65` |
+| the veto | `shouldBlockVillageZombieRaid(attemptedSpawnPos)` → `EventResult.DENY` | `TorchmasterEventHandler.java:131-149` |
+| registry | OR over every registered light's `shouldBlockVillageZombieRaid(pos)` | `FilteredLightManager.java:36-47` |
+| Mega Torch | cubic `IDistanceLogic.Cubic.isPositionInRange` with `megaTorchRadius` (default **64**), **no** entity-type filter — a siege is by definition a zombie raid | `MegatorchEntityBlockingLight.java:35-38` |
+| Dread Lamp | **always false** — a lamp never vetoes a siege, even though it shares the registry | `DreadLampEntityBlockingLight.java:35-39` |
+| defaults kept | `aggressiveSpawnChecks` consulted, but with no other mod present the event starts `DEFAULT`, so this port only ever cancels or does nothing | `TorchmasterEventHandler.java:136` |
+
+This is the companion to the phantom gate but not a copy of it: the phantom path calls
+`shouldBlockEntityType(PHANTOM, …, NATURAL)`, which does consult the entity filter; the siege path
+does not. The port expresses it as `runtime::siege_veto(dimension, pos, lights)` — any **Mega Torch**
+in the same dimension within `SIEGE_RADIUS = RADIUS = 64` (the artefact's `megaTorchRadius`), and
+never a Dread Lamp.
+
+### TDD and ladder
+
+The three pure tests were written first and failed to compile against the missing symbols
+(`siege/unit-tdd-red.log`: **6 `E0425`**, `cargo test` exit 101 — one `SIEGE_RADIUS` and five
+`siege_veto`). `siege/unit-tdd-green.log` then showed **27 passed, 0 failed** (24 → 27).
+`siege/lint.log`: `cargo fmt --check` + `cargo clippy --all-targets -- -D warnings` clean, 0 warnings.
+
+| Step | Command | Result |
+|---|---|---|
+| tests | `cargo test --offline` | **27 passed**, 0 failed (`sdk-test.log` regenerated after the final build) |
+| fmt + lints | `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` | clean, 0 warnings (`siege/lint.log`) |
+| package | `cargo horizon-mod build` | 0.2.7 `.hmod`, no lock packed (`siege/final-build.log`) |
+| registry check | `cargo horizon-mod check torchmaster.hmod` | `torchmaster 0.2.7 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)`, **45,716 B** (`siege/final-check-fits.log`) |
+| fits the pin | `… --build 0a875da` | `0a875da  made for`, exit 0 |
+| fits the previous build | `… --build 0b14f8a` | `fits`, exit 0 — both in `siege/final-check-fits.log` |
+| launcher | `launcher-game.sh build torchmaster` (stale `native-*` tags removed first) | `Compiling torchmaster (1 of 1)`, `native-0a875da-dd00bc8f3a40`, `EXIT:0` (`siege/native-build.log`) |
+| gate | `python3 ports/tools/verify-sdk-package.py torchmaster` | **1/1**, including `package matches the tree` (`siege/gate.log`) |
+
+### In game on the delivered bytes
+
+`ports/_shared/evidence/torchmaster-e2e/` (`tools/e2e.sh`, phase I added):
+
+```
+PASS: control=2, torch=0, outside=1, after_break=4 monsters; lamp_control=2, lamp=0,
+      lamp_outside=6 bats, lamp_box_monsters=70; drops torch=1 lamp=1 control=1;
+      flare=7 lights, after break 0, stone control 0;
+      pearl 3 -> 0 lights for damage 0 -> 3, vanilla cell 2 -> 2 for damage 3;
+      spawner 6 -> 0 zombies beside a lit lantern;
+      phantom 1 -> 0 near an insomniac player;
+      siege 3 -> 0 zombies in the village; /torchmaster readouts matched at every phase
+EXIT:0
+```
+
+- **Village siege:** the arena is an **open-sky** platform at x=640 (floor y=200, walls to y=208,
+  **no roof** — a roof would make `sky_darken < 4` and the siege tick returns before any attempt),
+  with a row of five bells and five summoned villagers across x=608..672 so both the player's
+  section and the 24–40-block-away siege spawn cells count as "in a village". Difficulty hard,
+  `spawn_mobs`/`spawn_monsters` on, clock frozen at midnight (`ctl time 18000`). Villagers claim
+  the bells as meeting points (900 ticks), then the control window kills every zombie, drops the
+  clock to noon and back (which clears the siege's once-per-night `set_up` state), and reads the
+  **type-filtered** `ctl entities 16 minecraft:zombie` count every 100 ticks for up to three
+  900-tick windows. The control grew **3** zombies in 500 ticks; after a Mega Torch was placed 4
+  blocks from the village centre (within the artefact's 64 of every attempted spawn), the same
+  window grew **0** in 1800 ticks. The `/torchmaster` readout confirms the torch is registered in
+  the siege phase.
+- **Counterfactual:** `SELFTEST=siege` inverted I2, saw 0 zombies against a control of 1 and ended
+  `FAIL` + `EXIT:1` (`torchmaster-e2e/siege/e2e-selftest-siege.log`, kept in a subfolder so the
+  strict checks keep their 7/7 counts). The unmodded `CONTROL=1` leg and the original `SELFTEST=1`,
+  `SELFTEST=flare`, `SELFTEST=pearl`, `SELFTEST=phantom` and `SELFTEST=spawner` legs were all re-run
+  on this build and each ends `EXIT:1`. `check-e2e-logs.py torchmaster-e2e --strict` → `logs=7 ok=7`.
+- **Carrying families stay green:** the spawner, phantom, pearl, flare, both spawn-veto blocks, both
+  drops and every `/torchmaster` readout re-ran on the delivered bytes. The dialect leg proved all
+  **four** recipes and three loot tables (`PASS` + `EXIT:0`, `SELFTEST=1` `FAIL` + `EXIT:1`);
+  `check-e2e-logs.py torchmaster --strict` → `logs=7 ok=7`.
+
+Delivered `torchmaster.hmod` **45,716 B**, SHA-256
+**`98c23932949e573de647256284a45cd7687ec97d6d9281ef7d37ba796a7e7ff6`**, 44 entries, no `Cargo.lock`.
+
+### Coverage
+
+| Family | State |
+|---|---|
+| Village-siege veto: a Mega Torch within `megaTorchRadius` of the attempted spawn stops the raid | tested (e2e phase I, type-filtered count `3 -> 0`, `SELFTEST=siege` `EXIT:1`) |
+| Only a Mega Torch vetoes a siege; a Dread Lamp never does, and a torch elsewhere or in another dimension never does | tested (3 pure unit tests) |
+| Mega Torch / Dread Lamp natural-spawn veto, phantom veto, both recipes and loot tables, drops, `/torchmaster` readout, flare light, pearl cleanup, spawner quietening | tested (the seven carried legs, re-run green on 0.2.7) |
+| Frozen Pearl sound, line-of-sight menu/GUI, volume renderer | not ported (tier `logic`; no sound/menu/renderer surface carried) |
+| Child-light persistence across a world restart | `blocked(persistence)`; residual lights are cleanable with the pearl |
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices (named consts, pure rule free of `mod_api`, `must_use` on pure predicates, no clone-to-satisfy-borrowck, `expect` with a reason)
+
+## Next slice
+
+**Family:** the in-game Dread Lamp differential for village sieges.
+**Gap line:** coverage row "Only a Mega Torch vetoes a siege; a Dread Lamp never does … | tested (3
+pure unit tests)" — the in-game half is missing; the artefact's
+`DreadLampEntityBlockingLight.shouldBlockVillageZombieRaid` returns `false` unconditionally.
+**Tier fit:** `logic` — the same stamped `village_siege` hook and registry, no new API; reuse phase
+I's open-sky village and night reset with a Dread Lamp at the centre instead of the Mega Torch.
+**In-game assertion:** with a Dread Lamp placed in the village, trigger a siege and assert the
+type-filtered `ctl entities 16 minecraft:zombie` count stays `> 0` (the same as with no light);
+`SELFTEST=siege-lamp` inverts it to `EXIT:1`. This is an evidence-only change to the package (the
+pure rule already pins it), so flag it to the orchestrator rather than publishing a version whose
+only difference is its string.
