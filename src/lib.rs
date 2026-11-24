@@ -23,16 +23,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use mod_api::{
-    self, BlockChangedEvent, BlockState, BlockUpdateFlags, Command, Flow, Hooks, Host, HostSide,
-    LevelHost, LevelRef, LevelTickPostEvent, LightLayer, PotentialSpawnsEvent,
-    RegisterCommandsEvent, RunModCommandEvent, ServerHost, ServerStartedEvent, Text,
-    WorldLifecycleEvent, WorldPhase,
+    self, BlockChangedEvent, BlockState, BlockUpdateFlags, Command, EquipmentSlot, Flow, Hand,
+    Hooks, Host, HostSide, InteractionResult, ItemPart, LevelHost, LevelRef, LevelTickPostEvent,
+    LightLayer, PotentialSpawnsEvent, RegisterCommandsEvent, Registrar, RegistrationContext,
+    RunModCommandEvent, ServerHost, ServerStartedEvent, Text, UseItemEvent, WorldLifecycleEvent,
+    WorldPhase,
 };
 
 use runtime::{
-    FLARE_HARD_CAP, FLARE_MIN_LIGHT, FLARE_TICK_RATE, Flare, INVISIBLE_LIGHT, Light, LightKind,
-    RADIUS, blocks, count_line, format_lights, is_flare_block, is_invisible_light, light_lines,
-    next_candidate, parse_lights, remove, should_place, take_flare, upsert, upsert_flare,
+    FLARE_HARD_CAP, FLARE_MIN_LIGHT, FLARE_TICK_RATE, FROZEN_PEARL, Flare, INVISIBLE_LIGHT, Light,
+    LightKind, PEARL_RADIUS, RADIUS, blocks, count_line, format_lights, is_flare_block,
+    is_invisible_light, is_residual_light, light_lines, next_candidate, parse_lights,
+    pearl_removals, remove, should_place, take_flare, upsert, upsert_flare,
 };
 
 /// The lights live in `<world>/torchmaster/lights.tsv`, the path the retired bundle used,
@@ -77,6 +79,14 @@ struct Mod {
 
 #[mod_api::horizon_mod]
 impl Hooks for Mod {
+    /// Attach the frozen pearl's behaviour to the item the content declares. The
+    /// Part is asked only when that item is right-clicked; its id comes from the
+    /// artefact (`ModRegistry.java:97`), not from the mod's name.
+    fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
+        let pearl = r.item_key(FROZEN_PEARL);
+        r.item_part(pearl, PearlPart);
+    }
+
     /// Natural spawning asks which mobs could spawn at `pos`: a mega torch or dread lamp in
     /// range vetoes the category by emptying that list, which is what `Flow::Cancel` does.
     /// The host is read-only here, as the spawn pass is.
@@ -335,6 +345,79 @@ impl Mod {
                 }
             }
         }
+    }
+}
+
+/// The frozen pearl's right-click. `FrozenPearlItem.use` walks a `-15..=15` cube
+/// around the player's own block position and removes every `invisible_light` it
+/// finds, spending one durability charge per light. The game calls this Part only
+/// for `torchmaster:frozen_pearl` (attached in [`Hooks::register`]); the pure
+/// rules live in [`runtime`].
+#[derive(Clone)]
+struct PearlPart;
+
+#[mod_api::horizon_part]
+impl ItemPart for PearlPart {
+    fn use_item(
+        &self,
+        host: HostSide<'_>,
+        event: &mut UseItemEvent<'_>,
+    ) -> Option<InteractionResult> {
+        // Only the authoritative side may remove blocks and spend the charge;
+        // the client's prediction is left to the item's own use.
+        let HostSide::Server(host) = host else {
+            return None;
+        };
+        let game: &dyn Host = &*host;
+        // The event names its player explicitly: unlike a command hook, a use
+        // does not guarantee `players().acting_player()` is set.
+        let entity = host.entity(event.player_entity_id.try_into().ok()?)?;
+        let center = entity.block_position(game)?;
+        let level = entity.level(game)?;
+
+        // Upstream reads every cell of the 31×31×31 cube; an unloaded chunk
+        // answers no block and contributes nothing, which is the same rule.
+        let mut found = Vec::new();
+        for dx in -PEARL_RADIUS..=PEARL_RADIUS {
+            for dy in -PEARL_RADIUS..=PEARL_RADIUS {
+                for dz in -PEARL_RADIUS..=PEARL_RADIUS {
+                    let pos = [center[0] + dx, center[1] + dy, center[2] + dz];
+                    if level
+                        .block(game, pos)
+                        .is_some_and(|block| is_residual_light(&block.id(game)))
+                    {
+                        found.push(pos);
+                    }
+                }
+            }
+        }
+
+        let max = host.max_damage(event.stack.item()).unwrap_or(0);
+        let before = event.stack.damage();
+        let (removed, charges) = pearl_removals(center, &found, max, before);
+        for pos in &removed {
+            // Upstream calls `removeBlock(pos, false)`: no neighbour updates.
+            let _ = level.remove_block(&mut *host, *pos, false);
+        }
+        if charges > 0 {
+            let slot = match event.hand {
+                Hand::Main => EquipmentSlot::MainHand,
+                Hand::Off => EquipmentSlot::OffHand,
+            };
+            if let Some(living) = host.living(entity) {
+                let damage = before.saturating_add(charges);
+                if max > 0 && damage >= max {
+                    // The stack is spent: upstream's loop stops on an empty
+                    // `ItemStack`, so the pearl leaves the hand here.
+                    let _ = living.set_equipment(&mut *host, slot, None);
+                } else {
+                    let mut worn = event.stack.clone();
+                    worn.set_damage(damage);
+                    let _ = living.set_equipment(&mut *host, slot, Some(worn));
+                }
+            }
+        }
+        Some(InteractionResult::SuccessServer)
     }
 }
 

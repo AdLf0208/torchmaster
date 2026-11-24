@@ -1,0 +1,13 @@
+{
+  "recipe": {
+    "file": "data/torchmaster/recipe/frozen_pearl.json",
+    "items": {
+      "I": "minecraft:ice"
+    },
+    "expect": {
+      "id": "torchmaster:frozen_pearl",
+      "count": 1
+    },
+    "consume": "minecraft:ender_pearl"
+  }
+}

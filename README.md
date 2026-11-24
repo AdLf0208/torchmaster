@@ -7,14 +7,16 @@ Port of **Torchmaster 21.1.14** (`Xalcon/TorchMaster`, MIT) for Minecraft Java
 source.
 
 One flat `.hmod` carries both halves: `assets/` and `data/` are the content
-(three blocks, their items, recipes, loot, tags, models and textures, adapted from
-the upstream MIT assets), `src/` is the native half.
+(three blocks, their items, recipes, loot, tags, models and textures, plus the
+frozen pearl item and its recipe, adapted from the upstream MIT assets), `src/`
+is the native half.
 
-| Block | What it does |
+| Block / item | What it does |
 |---|---|
 | `torchmaster:megatorch` | vetoes natural spawns of every non-friendly category (vanilla: `monster`) in a cube of 64 around it |
 | `torchmaster:dreadlamp` | vetoes natural spawns of the friendly categories except `misc` in a cube of 64 |
 | `torchmaster:feral_flare_lantern` | writes `torchmaster:invisible_light` blocks (light 15) into empty, dark cells within 16 blocks, every 5 ticks, up to 255; breaking it removes them |
+| `torchmaster:frozen_pearl` | right-click clears residual `invisible_light` blocks in a 31×31×31 cube around the player, spending one of its 1024 charges per light |
 
 The veto covers the **natural spawn path only**, as the original's
 `blockOnlyNaturalSpawns` default asks: spawn eggs, breeding, spawners and
@@ -30,10 +32,11 @@ what the removed `log` calls used to say (see `notes.md` §0.2.2).
 ```
 horizon-mod.toml   the manifest and the only identity (api 0.2, [native] pin)
 Cargo.toml         horizon-mod-api from .horizon/sdk/ — the only dependency (R9)
-src/runtime.rs     the pure engine: kinds, cubic range, light/flare registries, TSV file, readout (16 tests)
-src/lib.rs         the one impl Hooks: potential_spawns, block_changed,
+src/runtime.rs     the pure engine: kinds, cubic range, light/flare registries, TSV file, readout, pearl cube/charges (20 tests)
+src/lib.rs         the one impl Hooks: register, potential_spawns, block_changed,
                    server_started, world_lifecycle, level_tick_post,
-                   register_commands, run_mod_command
+                   register_commands, run_mod_command; plus the frozen pearl's
+                   ItemPart (use_item) attached in register
 assets/torchmaster/  models, blockstates, textures, lang
 data/torchmaster/    block declarations, recipes, loot, creative tab
 data/minecraft/tags/ the mineable tag the blocks belong in; data/c/tags/ the recipe tags

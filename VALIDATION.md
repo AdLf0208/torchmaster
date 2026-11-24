@@ -66,6 +66,28 @@ the information), `Cargo.lock` deleted, `Cargo.toml` and `horizon-mod.toml` at 0
 
 Full record in [`notes.md`](notes.md) §0.2.3.
 
+## 0.2.4 — the Frozen Pearl and residual-light cleanup (2026-11-24, pin `0a875da`)
+
+| Check | Command | Result |
+|---|---|---|
+| artefact rules | upstream 21.1.14 `FrozenPearlItem.java` / `ModRegistry.java` / `TorchmasterNeoforgeConfig.java` | id `torchmaster:frozen_pearl`, cube `-15..=15` around the player (31³), removal of every `invisible_light` cell with `removeBlock(pos, false)`, durability **1024** with one charge per light |
+| TDD | tests first, then pure pearl cube/charges | compile-red (`../_shared/evidence/torchmaster/pearl/unit-tdd-red.log`, 22 `E0425`) → **20 passed** (`unit-tdd-green.log`) |
+| tests | `cargo test --offline` | **20 passed**, 0 failed (`pearl/unit-tdd-green.log`, regenerated `sdk-test.log`) |
+| fmt + lints | `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` | clean, 0 warnings (`pearl/lint.log`) |
+| package | `rm -f Cargo.lock && cargo horizon-mod build` | 0.2.4 `.hmod`, no lock packed (`pearl/build.log`) |
+| registry check | `cargo horizon-mod check torchmaster.hmod` | `torchmaster 0.2.4 (native-mod, native-1/0a875da…/e59da90…, for 26.3)`, **40,999 B** (`pearl/build-check-fits.log`) |
+| fits | `cargo horizon-mod fits torchmaster.hmod --build 0a875da` / `--build 0b14f8a` | `0a875da  made for` / `fits`, both exit 0 |
+| gate | `python3 ports/tools/verify-sdk-package.py torchmaster` | **1/1**, including `package matches the tree` |
+| launcher | `launcher-game.sh build torchmaster` (stale `native-*` tag removed first) | `Compiling torchmaster (1 of 1)`, `native-0a875da-70be8adea14d`, `EXIT:0` (`pearl/native-build.log`) |
+| pearl proof | `tools/e2e.sh` phase F | `PASS` + `EXIT:0`: residual lights **3 -> 0**, pearl damage **0 -> 3** of 1024 (`../_shared/evidence/torchmaster-e2e/e2e.log`) |
+| counterfactual | `SELFTEST=pearl tools/e2e.sh` | `FAIL` + `EXIT:1` (`e2e-selftest-pearl.log`) |
+| differential | vanilla-lit cell (box B, 160 blocks away) | lights **2 -> 2**, damage **3 -> 3**; earlier spawn/drop/flare legs re-ran green |
+| carried recipes + loot | `tools/e2e-dialect.sh` (four specs incl. `dialect-proof-pearl.json`) | `PASS` + `EXIT:0`; `SELFTEST=1` `FAIL` + `EXIT:1` |
+| log gate | `check-e2e-logs.py torchmaster-e2e --strict` / `torchmaster --strict` | `logs=5 ok=5` / `logs=7 ok=7`, both exit 0 |
+| delivered | `torchmaster.hmod` | **40,999 B**, SHA-256 `e894d0818a85c8101d13694cd49dbda94e119045eed3967869c405e3606ae3fb`, 44 entries |
+
+Full record in [`notes.md`](notes.md) §0.2.4.
+
 ## The retired `.hnmod` bundle (pin `1d63e0a`, kept for the record)
 
 | Check | Result |

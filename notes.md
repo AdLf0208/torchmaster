@@ -799,3 +799,113 @@ in place (or load a world with one), then right-click a frozen pearl at that cel
 -8 200 -8 8 205 8 | jq -r '.counts["torchmaster:invisible_light"]'` must go from `> 0` to `0`,
 while the same pearl used on a vanilla-lit cell changes no count and does not lose a charge.
 `SELFTEST=pearl` inverts the removal assertion and ends `EXIT:1`.
+
+## 0.2.4 (2026-11-24) — the Frozen Pearl and the residual-light cleanup
+
+Pin **`0a875da91dbb0fdcb7ba8c42c11341aa229af51a`** (mixins `e59da909…`), registry entry ours on
+`main`, so this is an **Update** to **0.2.4** (0.2.3 on PR #1807).
+
+### What the artefact actually declares (read, not inferred)
+
+Source: the upstream clone at `ports/_shared/upstream/torchmaster` commit
+`a11226c866bf4e9f0695621db5971418dffe3014` (21.1.14, the installed version's tag), files
+`common/.../items/FrozenPearlItem.java`, `ModRegistry.java` and
+`neoforge/.../TorchmasterNeoforgeConfig.java` (the same clone 0.2.3 read).
+
+| Rule | Measured value | Source |
+|---|---|---|
+| item id | `torchmaster:frozen_pearl` | `ModRegistry.java:97` (registered as a plain `Item`, added to the creative tab at `:98`) |
+| range | three nested `-15..=15` loops around **`player.blockPosition()`** → a **31×31×31** cube, not the lantern's radius and not a clicked block | `FrozenPearlItem.java:35-44` |
+| removal rule | every cell whose block is `ModRegistry.blockInvisibleLight` (`torchmaster:invisible_light`) is removed with `level.removeBlock(checkPos, false)`; no owner filter, no neighbour updates; the loop stops when the stack empties | `FrozenPearlItem.java:44-51` |
+| durability cost | `frozenPearlDurability` default **1024**, one charge per removed light, `0` disables | `TorchmasterNeoforgeConfig.java:122-125` |
+| recipe | shaped `I/E/I` cross, `E` = ender pearl, `I` = ice or packed ice | `data/torchmaster/recipe/frozen_pearl.json`, converted to 26.3 bare-id dialect |
+| sound | `LAVA_EXTINGUISH` at the player | `FrozenPearlItem.java:37` — not carried (no sound hook in this tier) |
+
+**Upstream defect fixed.** The config declares `frozenPearlDurability` (default 1024, "each removed
+light will remove one charge"), but `FrozenPearlItem` is built with a bare `new Item.Properties()`
+and never calls `hurtAndBreak`/`damage`: in the shipped jar the pearl is **unbreakable** and the
+config option does nothing. Following the campaign's defect rule, the port implements the stated
+behaviour: the item declares `minecraft:max_damage = 1024` and each removed light costs one charge;
+at zero charges the pearl leaves the hand, which is where upstream's `isEmpty()` early return was
+aimed. A user notices the pearl wearing out after 1024 removed lights instead of never wearing out.
+The in-game charge assertion (`0 -> 3`, and unchanged on a vanilla-lit cell) fails if this is
+reproduced.
+
+**Deviation — deterministic fixture.** Upstream's loop is deterministic already (a fixed cube);
+the harness writes the residual lights with `/setblock` in a loaded arena rather than relying on a
+lantern leaving them behind, because the lantern removes its children on break and child lights are
+not persisted (`block_changed` only fires for loaded blocks). That is exactly the `blocked(persistence)`
+case the pearl exists to clean up.
+
+### TDD and ladder
+
+Four pure tests were written first and failed to compile against the missing symbols
+(`pearl/unit-tdd-red.log`, **22 `E0425`** errors), then `pearl/unit-tdd-green.log` showed **20
+passed, 0 failed** (16 → 20). `pearl/lint.log`: `cargo fmt --check` + `cargo clippy --all-targets
+-- -D warnings` clean. The glue is one `ItemPart` (`use_item`) attached in `Hooks::register` with
+`r.item_part(r.item_key(FROZEN_PEARL), PearlPart)`; wear is written with `LivingRef::set_equipment`,
+because `LivingRef::hurt_and_break` returns `None` for this acting player at the use-item site
+(measured with a temporary diagnostic readout, since removed).
+
+| Step | Command | Result |
+|---|---|---|
+| tests | `cargo test --offline` | **20 passed**, 0 failed (`pearl/unit-tdd-green.log`, regenerated `sdk-test.log`) |
+| fmt + lints | `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` | clean, 0 warnings (`pearl/lint.log`) |
+| package | `rm -f Cargo.lock && cargo horizon-mod build` | 0.2.4 `.hmod`, no `Cargo.lock` packed (`pearl/build.log`) |
+| registry check | `cargo horizon-mod check torchmaster.hmod` | `torchmaster 0.2.4 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)`, **40,999 B** (`pearl/build-check-fits.log`) |
+| fits the pin | `… --build 0a875da` | `0a875da  made for`, exit 0 |
+| fits the previous build | `… --build 0b14f8a` | `fits`, exit 0 |
+| launcher | `launcher-game.sh build torchmaster` (stale `native-*` tag removed first) | `Compiling torchmaster (1 of 1)`, `native-0a875da-70be8adea14d`, `EXIT:0` (`pearl/native-build.log`) |
+| the gate | `python3 ports/tools/verify-sdk-package.py torchmaster` | **1/1**, including `package matches the tree` |
+
+### In game on the delivered bytes
+
+`ports/_shared/evidence/torchmaster-e2e/` (`tools/e2e.sh`, phase F added):
+
+```
+PASS: control=12, torch=0, outside=2, after_break=4 monsters;
+      lamp_control=4, lamp=0, lamp_outside=1 bats, lamp_box_monsters=70;
+      drops torch=1 lamp=1 control=1; flare=7 lights, after break 0, stone control 0;
+      pearl 3 -> 0 lights for damage 0 -> 3, vanilla cell 2 -> 2 for damage 3;
+      /torchmaster readouts matched at every phase
+EXIT:0
+```
+
+- **Pearl:** a 31-block cube centred on the player removed 3 residual `invisible_light` cells and
+  spent exactly 3 of 1024 charges (`ctl state .held` `damage: 0 -> 3`, `max_damage: 1024`).
+- **Differential:** two residual lights left in box A while the player uses the pearl beside a
+  vanilla torch in box B, 160 blocks away: count `2 -> 2`, damage `3 -> 3`. The pearl neither
+  reaches out of range nor spends a charge when nothing was removed.
+- **Counterfactual:** `SELFTEST=pearl` inverted the removal assertion, saw 0 lights and ended
+  `FAIL` + `EXIT:1`; `SELFTEST=1` and `SELFTEST=flare` still end `EXIT:1`; the unmodded
+  `CONTROL=1` leg still ends `EXIT:1`. `check-e2e-logs.py torchmaster-e2e --strict` → `logs=5 ok=5`.
+- **Carrying families stay green:** the mega torch, dread lamp, flare, both drop legs and all
+  `/torchmaster` readouts re-ran on the delivered bytes; `tools/e2e-dialect.sh` now proves **four**
+  recipes (megatorch, dreadlamp, flare, pearl) and the three block loot tables, `PASS` + `EXIT:0`,
+  with `SELFTEST=1` `FAIL` + `EXIT:1`. `check-e2e-logs.py torchmaster --strict` → `logs=7 ok=7`.
+
+### Coverage
+
+| Family | State |
+|---|---|
+| Frozen Pearl clears residual `invisible_light` in the player's cube, one charge per light | tested (e2e phase F, count `> 0 -> 0`, damage `0 -> 3`) |
+| Pearl used where no residual light is in range loses no charge | tested (vanilla-cell differential, phase F) |
+| Pearl recipe in 26.3 dialect | tested (`dialect-proof-pearl.json`, `e2e-dialect.sh`) |
+| Durability 1024 / one charge per light / 0 disables | tested (3 unit tests + in-game charge read) |
+| Child-light registry across a world restart | still not automatic; the residual blocks are now cleanable with the pearl (`blocked(persistence)` row closed by the cleanup, not by persistence) |
+| Frozen Pearl sound, line-of-sight menu/GUI, volume renderer, spawner interactions | not ported (tier `logic`; no sound/menu/renderer/entity surface carried) |
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices (named consts, `expect` with a reason, pure functions free of `mod_api`, `Clone` only for the part's stack copy)
+
+## Next slice
+
+**Family:** the feral-lantern spawner interactions (the last flare family still expressible at this
+tier), starting by checking whether the pin stamps a hook for lantern-fed spawner behaviour.
+**Gap line:** "the feral-lantern spawner interactions are still not carried" (§0.2.3) and its
+coverage row.
+**Tier fit:** `logic` — the lantern is a placed block whose child lights already change spawning
+conditions; no GUI or renderer. If the pin has no stamped spawner hook, report `blocked(<symbol>)`
+instead of inventing one.
+**In-game assertion:** place a spawner next to a lit lantern and `ctl entities 16 minecraft:zombie`
+must differ with and without the lantern's residual light; parse the type-filtered count, never
+the absence of an error.

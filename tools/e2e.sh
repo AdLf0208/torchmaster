@@ -20,10 +20,15 @@
 #     in the vetoed box and exit 1. That is the counterfactual.
 #   * SELFTEST=flare — the same run, but only the flare-light assertion is inverted
 #     (the earlier phases stay green); it must see no light and exit 1.
+#   * SELFTEST=pearl — only the pearl's removal assertion is inverted; it must see
+#     the residual lights still there and exit 1.
 #
 #   E. the Feral Flare Lantern writes `torchmaster:invisible_light` blocks in the sealed
 #      dark box and emits light; breaking it takes the count back to zero. A plain stone
 #      block in a second sealed box writes none (differential).
+#   F. a Frozen Pearl right-click removes residual `invisible_light` in the player's
+#      31-block cube and spends a charge per light; used on a vanilla-lit cell with no
+#      residual light in range it changes no count and loses no charge (differential).
 #
 # The arenas are sealed stone boxes in the Overworld sky (floor y=200, roof y=208), where
 # the world surface is far below, so the only natural-spawn attempts near the player are
@@ -70,6 +75,7 @@ MEGA=torchmaster:megatorch
 LAMP=torchmaster:dreadlamp
 FLARE=torchmaster:feral_flare_lantern
 LIGHT=torchmaster:invisible_light
+PEARL=torchmaster:frozen_pearl
 # The friendly families (passive `creature` and `ambient`); the Dread Lamp vetoes every
 # one of them, so a monster is any mob whose type is not in this list.
 FRIENDLY='["minecraft:pig","minecraft:cow","minecraft:sheep","minecraft:chicken","minecraft:rabbit","minecraft:horse","minecraft:donkey","minecraft:mule","minecraft:llama","minecraft:fox","minecraft:wolf","minecraft:bee","minecraft:parrot","minecraft:bat","minecraft:squid","minecraft:glow_squid","minecraft:axolotl","minecraft:turtle","minecraft:frog","minecraft:armadillo","minecraft:goat","minecraft:camel","minecraft:sniffer","minecraft:cat","minecraft:ocelot","minecraft:panda","minecraft:polar_bear","minecraft:villager","minecraft:mooshroom","minecraft:allay","minecraft:tadpole","minecraft:dolphin","minecraft:strider"]'
@@ -216,6 +222,12 @@ block_id() { ctl block "$1" "$2" "$3" | jq -r '.block // "unknown"'; }
 light_block() { ctl light "$1" "$2" "$3" "$4" "$5" "$6" | jq -r '.block'; }
 invisible_lights() {
     ctl blocks "$1" "$2" "$3" "$4" "$5" "$6" | jq -r --arg i "$LIGHT" '.counts[$i] // 0'
+}
+# The pearl's remaining wear, summed over the carried stacks. `ctl inventory`
+# reports `damage` only when it is nonzero, so an unworn pearl reads 0.
+pearl_damage() {
+    ctl inventory | jq -r --arg i "$PEARL" \
+        '[ (.hotbar[]?, .main[]?) | select(.item == $i) | (.damage // 0) ] | add // 0'
 }
 drop_count() { # x y z item -> what the break's `drops` says it dropped
     local reply drops picked status
@@ -518,5 +530,87 @@ echo "  stone in a sealed dark box: invisible lights = $stone_lights"
 [ "$(block_id 320 201 0)" = "minecraft:stone" ] || fail "the stone differential was not placed"
 [ "$stone_lights" -eq 0 ] || fail "a plain stone block wrote $stone_lights invisible lights"
 
-echo "PASS: control=$control_hostile, torch=$torch_hostile, outside=$outside_hostile, after_break=$returned_hostile monsters; lamp_control=$control_bats, lamp=$lamp_bats, lamp_outside=$outside_bats bats, lamp_box_monsters=$lamp_hostile; drops torch=$torch_drop lamp=$lamp_drop control=$control_drop; flare=$flare_count lights, after break $after_flare, stone control $stone_lights; /torchmaster readouts matched at every phase"
+# ---- F. the Frozen Pearl clears residual light and spends one charge per light --------
+# The lantern was broken in phase E, so nothing rewrites these cells. Writing the
+# residual lights directly stands in for a world loaded with a lantern's lights
+# (the blocked(persistence) gap) and makes the count deterministic.
+say "F. the Frozen Pearl removes residual light in the player's cube, one charge each"
+ctl command "gamemode creative @a" >/dev/null
+ctl command "difficulty peaceful" >/dev/null
+# Build/reload the arena while creative: a survival `ctl tp` into a chunk that is
+# still loading drops the player through the floor (and can kill them). Switching
+# to survival happens only after the player stands on the loaded floor.
+build_room 0 0 200 minecraft:stone
+ctl tp 0.5 201 0.5 >/dev/null
+ctl wait 20
+floor=$(block_id 0 200 0)
+[ "$floor" = "minecraft:stone" ] || fail "arena A was not loaded for the pearl leg ($floor)"
+ctl command "setblock -2 201 0 $LIGHT" >/dev/null
+ctl command "setblock -3 201 0 $LIGHT" >/dev/null
+ctl command "setblock -4 201 0 $LIGHT" >/dev/null
+ctl wait 5
+[ "$(block_id -2 201 0)" = "$LIGHT" ] || fail "the residual light fixture was not written ($(block_id -2 201 0))"
+pearl_before=$(invisible_lights -8 200 -8 8 205 8)
+echo "  residual lights before the pearl: $pearl_before"
+[ "$pearl_before" -gt 0 ] || fail "the residual-light fixture was not written"
+
+ctl command "gamemode survival @a" >/dev/null
+ctl command "clear @a" >/dev/null
+give_reply=$(ctl give "$PEARL" 1) || fail "give $PEARL failed: $give_reply"
+ctl wait 10
+echo "  give: $give_reply"
+echo "  hotbar: $(ctl inventory | jq -c '[.hotbar[] | select(.item == "'"$PEARL"'")]')"
+pearl_slot=$(ctl inventory | jq -r --arg i "$PEARL" '[.hotbar[] | select(.item == $i) | .slot][0] // empty')
+[ -n "$pearl_slot" ] || fail "the frozen pearl is not in the hotbar after give"
+# `ctl inventory` numbers slots from 0; `ctl select` takes hotbar positions 1-9.
+pearl_slot=$((pearl_slot + 1))
+ctl select "$pearl_slot" >/dev/null || fail "select slot $pearl_slot failed"
+ctl wait 4
+echo "  held: $(ctl state | jq -c '.held')"
+dmg_before=$(pearl_damage)
+echo "  pearl damage before: $dmg_before"
+ctl use-item >/dev/null || fail "ctl use-item failed"
+ctl wait 4
+pearl_after=$(invisible_lights -8 200 -8 8 205 8)
+dmg_after=$(pearl_damage)
+echo "  after the pearl: invisible lights $pearl_after; pearl damage $dmg_before -> $dmg_after"
+if [ "$SELFTEST" = pearl ]; then
+    # Inverted on purpose: the residual lights must remain, so this run MUST fail.
+    [ "$pearl_after" -eq "$pearl_before" ] \
+        || fail "SELFTEST: expected $pearl_before residual lights to remain, saw $pearl_after"
+    fail "SELFTEST: the inverted pearl assertion passed (exit 1 is the counterfactual)"
+fi
+[ "$pearl_after" -eq 0 ] || fail "the pearl left $pearl_after residual lights"
+[ "$dmg_after" -gt "$dmg_before" ] \
+    || fail "the pearl removed lights without spending a charge ($dmg_before -> $dmg_after)"
+
+# Differential: the same pearl used on a vanilla-lit cell with no residual light
+# inside its cube. The fixture is left in box A; the player stands in box B, 160
+# blocks away, next to a vanilla torch. Neither the count nor the wear may move.
+ctl command "setblock -2 201 0 $LIGHT" >/dev/null
+ctl command "setblock -3 201 0 $LIGHT" >/dev/null
+ctl wait 5
+standby=$(invisible_lights -8 200 -8 8 205 8)
+# Again, build/reload box B in creative before returning to survival.
+ctl command "gamemode creative @a" >/dev/null
+build_room 160 0 200 minecraft:stone
+ctl tp 160.5 201 0.5 >/dev/null
+ctl wait 10
+ctl command "setblock 161 201 0 minecraft:torch" >/dev/null
+ctl command "gamemode survival @a" >/dev/null
+ctl wait 3
+[ "$(block_id 161 201 0)" = "minecraft:torch" ] || fail "the vanilla-lit differential cell was not built"
+ctl use-item >/dev/null || fail "ctl use-item (differential) failed"
+ctl wait 4
+standby_after=$(invisible_lights -8 200 -8 8 205 8)
+dmg_diff=$(pearl_damage)
+echo "  differential on a vanilla-lit cell: box A lights $standby -> $standby_after; pearl damage $dmg_after -> $dmg_diff"
+[ "$standby_after" -eq "$standby" ] \
+    || fail "a pearl used where no residual light was in range changed the count ($standby -> $standby_after)"
+[ "$dmg_diff" -eq "$dmg_after" ] \
+    || fail "a pearl used where nothing was removed lost a charge ($dmg_after -> $dmg_diff)"
+ctl command "setblock 161 201 0 minecraft:air" >/dev/null
+ctl command "gamemode creative @a" >/dev/null
+
+echo "PASS: control=$control_hostile, torch=$torch_hostile, outside=$outside_hostile, after_break=$returned_hostile monsters; lamp_control=$control_bats, lamp=$lamp_bats, lamp_outside=$outside_bats bats, lamp_box_monsters=$lamp_hostile; drops torch=$torch_drop lamp=$lamp_drop control=$control_drop; flare=$flare_count lights, after break $after_flare, stone control $stone_lights; pearl $pearl_before -> $pearl_after lights for damage $dmg_before -> $dmg_after, vanilla cell $standby -> $standby_after for damage $dmg_diff; /torchmaster readouts matched at every phase"
 exit 0

@@ -7,10 +7,10 @@
 #
 # Cargo's name and version are not the mod's identity: horizon-mod.toml is.
 name = "torchmaster"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2024"
 license = "MIT"
-description = "Torchmaster for Horizon: blocking lights veto natural spawns and the Feral Flare Lantern writes invisible light"
+description = "Torchmaster for Horizon: blocking lights veto natural spawns, the Feral Flare Lantern writes invisible light, and the Frozen Pearl clears residual light"
 publish = false
 
 [dependencies]

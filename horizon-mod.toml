@@ -1,12 +1,14 @@
 id = "torchmaster"
 name = "Torchmaster"
-version = "0.2.3"
+version = "0.2.4"
 description = """Torchmaster for Horizon: the Mega Torch keeps hostile monsters from spawning
 naturally in a cube of 64 blocks around it, and the Dread Lamp does the same for passive animals
 like squids, bats and ocelots. The Feral Flare Lantern writes invisible light blocks into empty,
-dark cells around itself and removes them when it breaks. Each block has a recipe, a loot table
-and a place in the creative tab. Only the natural spawn path is vetoed, so spawn eggs, breeding,
-spawners and commands still work, exactly as the original's blockOnlyNaturalSpawns default asks."""
+dark cells around itself and removes them when it breaks. The Frozen Pearl clears those residual
+lights in a 31-block cube around the player, spending one of its 1024 charges per light. Each
+block and the pearl has a recipe and a place in the creative tab. Only the natural spawn path is
+vetoed, so spawn eggs, breeding, spawners and commands still work, exactly as the original's
+blockOnlyNaturalSpawns default asks."""
 authors = ["Xalcon", "AdLf0208"]
 # A native mod: Rust in src/, compiled by the launcher against the game build [native] pins,
 # beside data/ and assets/. The id is the resource namespace and the only identity: Cargo's

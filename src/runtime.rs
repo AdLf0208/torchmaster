@@ -384,6 +384,72 @@ pub fn take_flare(flares: &mut Vec<Flare>, dimension: &str, pos: [i32; 3]) -> Op
         .map(|index| flares.remove(index))
 }
 
+// ---- the Frozen Pearl and residual-light cleanup (0.2.4) ---------------------------
+
+/// The pearl item id (`ModRegistry.java:97`).
+pub const FROZEN_PEARL: &str = "torchmaster:frozen_pearl";
+/// Upstream's `use` walks `-15..=15` on **each** axis around the player's own
+/// block position (`FrozenPearlItem.java:35-44`): a 31×31×31 cube. It is not the
+/// lantern's radius and it is not centred on a clicked block — read from the jar.
+pub const PEARL_RADIUS: i32 = 15;
+/// `frozenPearlDurability` (NeoForge default **1024**,
+/// `TorchmasterNeoforgeConfig.java:122-125`): one charge per removed light, `0`
+/// disables durability.
+pub const PEARL_DURABILITY: u32 = 1024;
+
+/// Whether a block id names the residual light the pearl removes. Upstream tests
+/// the block object against `ModRegistry.blockInvisibleLight`; the port compares
+/// the canonical block id the SDK gives it.
+#[must_use]
+pub fn is_residual_light(name: &str) -> bool {
+    name == INVISIBLE_LIGHT
+}
+
+/// Whether `pos` is inside the pearl's cube around `center`.
+#[must_use]
+pub fn in_pearl_range(center: [i32; 3], pos: [i32; 3]) -> bool {
+    (0..3).all(|axis| (pos[axis] - center[axis]).abs() <= PEARL_RADIUS)
+}
+
+/// The charges one use spends: one per light removed, capped by the charges the
+/// stack has left. A `max` of zero means durability is disabled, which costs
+/// nothing — exactly the config's `0` setting.
+#[must_use]
+pub fn pearl_charges(removed: usize, max: u32, damage: u32) -> u32 {
+    if max == 0 {
+        return 0;
+    }
+    let left = max.saturating_sub(damage) as usize;
+    removed.min(left) as u32
+}
+
+/// Which in-range lights a pearl removes and what the use costs.
+///
+/// Upstream walks the cube and returns early as soon as the stack empties, so a
+/// worn pearl can only remove as many lights as it has charges left. The port
+/// keeps that ordering: it removes the first `charges` of the in-range lights,
+/// never touching a light outside the player's 31-block cube.
+#[must_use]
+pub fn pearl_removals(
+    center: [i32; 3],
+    lights: &[[i32; 3]],
+    max: u32,
+    damage: u32,
+) -> (Vec<[i32; 3]>, u32) {
+    let in_range: Vec<[i32; 3]> = lights
+        .iter()
+        .copied()
+        .filter(|pos| in_pearl_range(center, *pos))
+        .collect();
+    let charges = pearl_charges(in_range.len(), max, damage);
+    let take = if max == 0 {
+        in_range.len()
+    } else {
+        charges as usize
+    };
+    (in_range.into_iter().take(take).collect(), charges)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -742,5 +808,55 @@ mod tests {
         assert_eq!(flare.children, vec![[-6, 201, 0]]);
         assert_eq!(flares.len(), 1);
         assert!(take_flare(&mut flares, "minecraft:overworld", [0, 201, 0]).is_none());
+    }
+
+    // ---- the Frozen Pearl and residual-light cleanup (0.2.4) ------------------------
+
+    #[test]
+    fn the_pearl_rules_are_what_the_artefact_declares() {
+        assert_eq!(FROZEN_PEARL, "torchmaster:frozen_pearl");
+        assert_eq!(PEARL_RADIUS, 15);
+        assert_eq!(PEARL_DURABILITY, 1024);
+        assert!(is_residual_light(INVISIBLE_LIGHT));
+        assert!(!is_residual_light(MEGA_TORCH));
+        assert!(!is_residual_light("minecraft:torch"));
+    }
+
+    #[test]
+    fn the_pearl_cube_is_a_31_block_cube_centred_on_the_player() {
+        let c = [0, 201, 0];
+        assert!(in_pearl_range(c, [15, 201, 15]));
+        assert!(in_pearl_range(c, [-15, 186, -15]));
+        assert!(!in_pearl_range(c, [16, 201, 0]));
+        assert!(!in_pearl_range(c, [0, 201, -16]));
+        assert!(!in_pearl_range(c, [0, 217, 0]));
+        // It is the player's own block position that centres the cube, not a clicked block.
+        assert!(in_pearl_range([2, 201, 3], [17, 201, 3]));
+        assert!(!in_pearl_range([2, 201, 3], [18, 201, 3]));
+    }
+
+    #[test]
+    fn each_removed_light_costs_one_charge_and_zero_disables_durability() {
+        assert_eq!(pearl_charges(3, PEARL_DURABILITY, 0), 3);
+        assert_eq!(pearl_charges(0, PEARL_DURABILITY, 0), 0);
+        assert_eq!(pearl_charges(3, 0, 0), 0);
+    }
+
+    #[test]
+    fn a_worn_pearl_stops_when_it_runs_out_of_charges() {
+        let center = [0, 201, 0];
+        let lights = vec![[1, 201, 0], [2, 201, 0], [3, 201, 0], [40, 201, 0]];
+        // 40 is outside the 31-block cube and is always left alone.
+        let (removed, charges) = pearl_removals(center, &lights, PEARL_DURABILITY, 0);
+        assert_eq!(removed, vec![[1, 201, 0], [2, 201, 0], [3, 201, 0]]);
+        assert_eq!(charges, 3);
+        // One charge left: only one light is removed before the pearl empties.
+        let (removed, charges) = pearl_removals(center, &lights, 4, 3);
+        assert_eq!(removed, vec![[1, 201, 0]]);
+        assert_eq!(charges, 1);
+        // With durability disabled every in-range light goes, at no charge.
+        let (removed, charges) = pearl_removals(center, &lights, 0, 0);
+        assert_eq!(removed.len(), 3);
+        assert_eq!(charges, 0);
     }
 }
