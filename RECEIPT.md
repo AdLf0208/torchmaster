@@ -1,11 +1,11 @@
-# Package receipt — torchmaster 0.2.5
+# Package receipt — torchmaster 0.2.6
 
 | field | value |
 |---|---|
-| version | `0.2.5` |
+| version | `0.2.6` |
 | file | `torchmaster.hmod` |
-| bytes | 43,053 |
-| sha256 | `bf05ad2348e0eb85300fdf6c81dd4d98003bdbb30e69369aee79e3574de49aa8` |
+| bytes | 44,630 |
+| sha256 | `89fe9162ee4d00238dad2745729cbf0f0a0b21dc696742219a832191312b3b19` |
 | source | this tag — the tree here is the source that produced the archive |
 | game | 26.3 |
 | horizon | `0a875da91dbb0fdcb7ba8c42c11341aa229af51a` |

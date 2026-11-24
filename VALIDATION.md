@@ -110,6 +110,27 @@ Full record in [`notes.md`](notes.md) §0.2.4.
 
 Full record in [`notes.md`](notes.md) §0.2.5.
 
+## 0.2.6 — the phantom spawn veto (2026-11-24, pin `0a875da`)
+
+| Check | Command | Result |
+|---|---|---|
+| gate | stamped `hook:player_spawn_phantoms` v1, `contract: replace`, `PhantomSpawnResult::Deny`, event `pos`/`player`/`name`/`phantoms` | **passes** (`surface.json` hash `44fc0a86…`); no invented cancel channel, no `Block` variant named (`../_shared/evidence/torchmaster/phantom/build-check-fits.log`) |
+| artefact rules | upstream 21.1.14 `TorchmasterEventHandler.java:106-129`, `NeoforgeEventHandler.java:63-83`, `TorchmasterNeoforgeConfig.java:67-70` | `shouldBlockEntityType(PHANTOM, level, player.position(), NATURAL)` with `megaTorchRadius` default **64**; phantoms are monsters, so only the Mega Torch matches |
+| TDD | tests first, then the pure `phantom_veto` / `PHANTOM_RADIUS` | compile-red (`phantom/unit-tdd-red.log`, 6 `E0425`) → **24 passed** (`unit-tdd-green.log`) |
+| tests | `cargo test --offline` | **24 passed**, 0 failed (`sdk-test.log` regenerated after the final build) |
+| fmt + lints | `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` | clean, 0 warnings (`phantom/lint.log`) |
+| package | `rm -f Cargo.lock && cargo horizon-mod build` | 0.2.6 `.hmod`, no lock packed (`phantom/build.log`) |
+| registry check | `cargo horizon-mod check torchmaster.hmod` | `torchmaster 0.2.6 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)`, 44,630 B |
+| fits | `cargo horizon-mod fits torchmaster.hmod --build 0a875da` / `--build 0b14f8a` | `0a875da  made for` / `fits`, both exit 0 (`phantom/build-check-fits.log`) |
+| launcher | `launcher-game.sh build torchmaster` | `Compiling torchmaster (1 of 1)`, `native-0a875da-af66071706cb`, `EXIT:0` (`phantom/native-build.log`) |
+| gate | `python3 ports/tools/verify-sdk-package.py torchmaster` | **1/1**, including `package matches the tree` (`phantom/gate.log`) |
+| phantom proof | `tools/e2e.sh` phase H | `PASS` + `EXIT:0`: an insomniac player under an open night sky grew **4** phantoms, **0** after a Mega Torch within 64 blocks; type-filtered `ctl entities 48 minecraft:phantom` with `health > 0` (`../_shared/evidence/torchmaster-e2e/e2e.log`) |
+| counterfactual | `SELFTEST=phantom tools/e2e.sh` | `FAIL` + `EXIT:1` (`e2e-selftest-phantom.log`); `CONTROL=1`, `SELFTEST=1`, `SELFTEST=flare`, `SELFTEST=pearl`, `SELFTEST=spawner` all redo `EXIT:1` |
+| log gate | `check-e2e-logs.py torchmaster-e2e --strict` / `torchmaster --strict` | `logs=7 ok=7` / `logs=7 ok=7`, both exit 0 |
+| delivered | `torchmaster.hmod` | **44,630 B**, SHA-256 `89fe9162ee4d00238dad2745729cbf0f0a0b21dc696742219a832191312b3b19`, 44 entries |
+
+Full record in [`notes.md`](notes.md) §0.2.6.
+
 ## The retired `.hnmod` bundle (pin `1d63e0a`, kept for the record)
 
 | Check | Result |

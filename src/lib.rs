@@ -29,17 +29,18 @@ use std::sync::Mutex;
 use mod_api::{
     self, BlockChangedEvent, BlockState, BlockUpdateFlags, Command, EquipmentSlot,
     FinalizeSpawnEvent, Flow, Hand, Hooks, Host, HostSide, InteractionResult, ItemPart, LevelHost,
-    LevelRef, LevelTickPostEvent, LightLayer, PotentialSpawnsEvent, RegisterCommandsEvent,
-    Registrar, RegistrationContext, RunModCommandEvent, ServerHost, ServerStartedEvent,
-    SpawnReason, Text, UseItemEvent, WorldLifecycleEvent, WorldPhase,
+    LevelRef, LevelTickPostEvent, LightLayer, PhantomSpawnResult, PlayerSpawnPhantomsEvent,
+    PotentialSpawnsEvent, RegisterCommandsEvent, Registrar, RegistrationContext,
+    RunModCommandEvent, ServerHost, ServerStartedEvent, SpawnReason, Text, UseItemEvent,
+    WorldLifecycleEvent, WorldPhase,
 };
 
 use runtime::{
     FLARE_HARD_CAP, FLARE_MIN_LIGHT, FLARE_TICK_RATE, FROZEN_PEARL, Flare, INVISIBLE_LIGHT, Light,
     LightKind, PEARL_RADIUS, RADIUS, blocks, count_line, format_lights, is_flare_block,
     is_invisible_light, is_residual_light, light_lines, next_candidate, parse_lights,
-    pearl_removals, remove, should_place, spawner_light_suppresses, take_flare, upsert,
-    upsert_flare,
+    pearl_removals, phantom_veto, remove, should_place, spawner_light_suppresses, take_flare,
+    upsert, upsert_flare,
 };
 
 /// The lights live in `<world>/torchmaster/lights.tsv`, the path the retired bundle used,
@@ -107,6 +108,31 @@ impl Hooks for Mod {
             return Flow::Cancel;
         }
         Flow::Continue
+    }
+
+    /// Upstream's `PlayerSpawnPhantomsEvent` handler asks the same registry the
+    /// natural-spawn veto uses: `shouldBlockEntityType(PHANTOM, level,
+    /// player.position(), NATURAL)` (`TorchmasterEventHandler.java:106-129`). A
+    /// Mega Torch within `megaTorchRadius` of an insomniac player therefore stops
+    /// the phantom attempt, while a Dread Lamp (friendly categories) does not.
+    /// The event begins with no result: returning `None` leaves vanilla's
+    /// default, and `Deny` is the one veto channel the stamped hook offers.
+    fn player_spawn_phantoms(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut PlayerSpawnPhantomsEvent<'_>,
+    ) -> Option<PhantomSpawnResult> {
+        // The event names its player by UUID; their own level handle names the
+        // dimension, so a light in another dimension cannot veto. No local type
+        // is named here: the stamped result variant is the whole signal, which
+        // keeps `uses.json` free of a `Block`-shaped false fail in `fits`.
+        let player = host.player(event.player)?;
+        let dimension = player.dimension(&*host)?.to_string();
+        let store = self.store.lock().expect(LOCK);
+        if phantom_veto(&dimension, event.pos, &store.lights) {
+            return Some(PhantomSpawnResult::Deny);
+        }
+        None
     }
 
     /// A spawner asks for a mob. This is the one spawn path `potential_spawns` never

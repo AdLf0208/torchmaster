@@ -5,10 +5,12 @@ Ported from **Torchmaster** (`torchmaster`, MIT, Xalcon/TorchMaster;
 Minecraft 26.3 on Horizon pin `1d63e0a5` (mixins `5a64af93`). Local-only until
 the maintainer approves publishing (ARCHITECTURE.md §8, licence rank 0).
 
-Status: **ported-partial — slice 1 (mega torch + dread lamp natural-spawn
-veto)**. The pre-spawn veto that blocked the port at `41f822b` is now expressible
-through `potential_spawns` v1 (API 388); the probe and the in-game run are
-recorded below.
+Status: **ported-partial — SDK package 0.2.6 (mega torch + dread lamp natural-spawn
+veto, the phantom veto, the feral lantern's invisible light and spawner quietening,
+and the frozen pearl's residual-light cleanup)**. The pre-spawn veto that blocked
+the port at `41f822b` is now expressible through `potential_spawns` v1 (API 388);
+the probe and the in-game run are recorded below. The phantom veto (0.2.6) uses
+the separately stamped `player_spawn_phantoms` hook.
 
 **Format (2026-11-18):** the live port is the flat **SDK package** at nightly
 `0b14f8a` (mixins `e59da90`, API `0.2`) — one `.hmod` with `horizon-mod.toml`,
@@ -993,3 +995,137 @@ companion family for the same gate.
 sealed sky box, `ctl entities 16 minecraft:phantom` must be lower than in the same world with the
 torch broken; parse the type-filtered count, and `SELFTEST=phantom` must invert it and end
 `EXIT:1`.
+
+## 0.2.6 (2026-11-24) — the phantom spawn veto
+
+Pin **`0a875da91dbb0fdcb7ba8c42c11341aa229af51a`** (mixins `e59da909…`), registry entry ours on
+`main` (0.2.5 staged on PR #1807), so this is an **Update** to **0.2.6**. Class `content`, tier
+`logic`; the logic+machines shape is unchanged: one pure rule in `runtime.rs`, one `Hooks` method in
+`src/lib.rs`, no renderer and no new crate. R9 holds: only the `horizon-mod-api` path dep, no
+`[workspace]`, no packed `Cargo.lock`.
+
+### The hook stamp (read, not assumed)
+
+`ports/_shared/sdk/0a875da/surface.json`:
+
+| Fact | Measured value |
+|---|---|
+| hook | `hook:player_spawn_phantoms`, hash `44fc0a861d57887929880e9f81c74f53`, **v1**, side server, `contract: replace`, `cancellable: false` |
+| engine target | `horizon_client::game::native_hooks::player_spawn_phantoms::Game<'_>::native_player_spawn_phantoms` |
+| event fields | `player: u128`, `name: &str`, `pos: [i32;3]` (the player's block position), `phantoms: &mut Option<i32>` |
+| method | `fn player_spawn_phantoms(&self, host: &mut dyn ServerHost, event: &mut PlayerSpawnPhantomsEvent<'_>) -> Option<PhantomSpawnResult>` |
+| the veto channel | `PhantomSpawnResult` is `#[non_exhaustive]` with `Allow`/`Default`/`Deny`; the dispatch returns the **first mod's `Some(..)`** and writes it to the game's result, so `Some(Deny)` is the stop, and `None` leaves vanilla's draw order untouched (`mod_api_generated.rs:17048-17049`) |
+
+No hook was invented and no cancel flag faked. The 0.2.5 `Block`-variant trap is avoided: the only
+SDK type named in the new code is the stamped `PhantomSpawnResult`, so `uses.json` gains no
+false-failing `handle:Block::new`, and both `fits` lines are green.
+
+### What the artefact declares (read, not inferred)
+
+Source: the upstream clone at `ports/_shared/upstream/torchmaster` commit
+`a11226c866bf4e9f0695621db5971418dffe3014` (21.1.14, the installed version's tag), files
+`common/src/main/java/net/xalcon/torchmaster/events/TorchmasterEventHandler.java:106-129` and
+`neoforge/src/main/java/net/xalcon/torchmaster/NeoforgeEventHandler.java:63-83`, plus
+`TorchmasterNeoforgeConfig.java:67-70` for the radius.
+
+| Rule | Measured value | Source |
+|---|---|---|
+| the veto | `shouldBlockEntityType(EntityType.PHANTOM, level, player.position(), MobSpawnType.NATURAL)` → `EventResult.DENY` | `TorchmasterEventHandler.java:117-128` |
+| radius | the Mega Torch's `megaTorchRadius`, default **64** — the same cube as the natural-spawn veto, not a separate phantom setting | `TorchmasterNeoforgeConfig.java:67-70` |
+| category | a phantom is a `monster`, so only the Mega Torch's list matches; the Dread Lamp's friendly list does not | `VanillaCompat.registerTorchEntities` / `MegatorchEntityBlockingLight.java:27-33` |
+| defaults kept | `blockOnlyNaturalSpawns` and `aggressiveSpawnChecks` are consulted, but with no other mod present the event begins as `DEFAULT`, so this port only ever returns `Deny` or nothing | `TorchmasterEventHandler.java:111-113` |
+
+The port expresses this as `runtime::phantom_veto(dimension, pos, lights)` =
+`blocks(dimension, "monster", pos, lights, PHANTOM_RADIUS)` with `PHANTOM_RADIUS = RADIUS = 64`.
+The dimension comes from the event's player UUID through `host.player(uuid)` and the player's own
+level handle, so a light in another dimension cannot veto.
+
+### TDD and ladder
+
+The three pure tests were written first and failed to compile against the missing symbols
+(`phantom/unit-tdd-red.log`: **6 `E0425`**, `cargo test` exit 101 — one `PHANTOM_RADIUS` and five
+`phantom_veto`). `phantom/unit-tdd-green.log` then showed **24 passed, 0 failed** (21 → 24).
+`phantom/lint.log`: `cargo fmt --check` + `cargo clippy --all-targets -- -D warnings` clean after
+matching rustfmt's single-line `assert!` form; 0 warnings.
+
+| Step | Command | Result |
+|---|---|---|
+| tests | `cargo test --offline` | **24 passed**, 0 failed (`phantom/unit-tdd-green.log`, `sdk-test.log` regenerated after the final build) |
+| fmt + lints | `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` | clean, 0 warnings (`phantom/lint.log`) |
+| package | `rm -f Cargo.lock && cargo horizon-mod build` | 0.2.6 `.hmod`, no lock packed (`phantom/build.log`) |
+| registry check | `cargo horizon-mod check torchmaster.hmod` | `torchmaster 0.2.6 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)`, **44,630 B** (`phantom/build-check-fits.log`) |
+| fits the pin | `cargo horizon-mod fits torchmaster.hmod --build 0a875da` | `0a875da  made for`, exit 0 |
+| fits the previous build | `… --build 0b14f8a` | `fits`, exit 0 — both in `phantom/build-check-fits.log` |
+| launcher | `launcher-game.sh build torchmaster` | `Compiling torchmaster (1 of 1)`, `native-0a875da-af66071706cb`, `EXIT:0` (`phantom/native-build.log`) |
+| gate | `python3 ports/tools/verify-sdk-package.py torchmaster` | **1/1**, including `package matches the tree` (`phantom/gate.log`) |
+
+### In game on the delivered bytes
+
+`ports/_shared/evidence/torchmaster-e2e/` (`tools/e2e.sh`, phase H added):
+
+```
+PASS: control=4, torch=0, outside=4, after_break=4 monsters; lamp_control=6, lamp=0,
+      lamp_outside=8 bats, lamp_box_monsters=72; drops torch=1 lamp=1 control=1;
+      flare=7 lights, after break 0, stone control 0;
+      pearl 3 -> 0 lights for damage 0 -> 3, vanilla cell 2 -> 2 for damage 3;
+      spawner 2 -> 0 zombies beside a lit lantern;
+      phantom 4 -> 0 near an insomniac player; /torchmaster readouts matched at every phase
+EXIT:0
+```
+
+- **Phantom:** the world is opened once, closed, then every player stats file it wrote is given
+  `minecraft:custom` → `minecraft:time_since_rest = 1000000`; the game grows that stat one tick at
+  a time and refuses a phantom until 72000, so the fixture makes the proof deterministic instead
+  of waiting an hour. An **open-sky** platform is required (the sealed boxes veto by light/sky),
+  set to night with `ctl time 18000` (13000 is not dark enough for `sky_darken >= 5`), hard
+  difficulty and `spawn_phantoms`/`spawn_monsters`/`doMobSpawning` on. With no light, an insomniac
+  player grew **4** phantoms in 2300 ticks; after a Mega Torch was placed 10 blocks away (within
+  the artefact's 64) and the phantoms were killed, **0** appeared in two full spawner windows
+  (5200 ticks). The assertion parses the *type-filtered* `ctl entities 48 minecraft:phantom`
+  count with `health > 0` (a phantom spawns 20..34 blocks up, so a 16-block search would miss it
+  before it dives), never the absence of an error.
+- **Counterfactual:** `SELFTEST=phantom` inverted the H2 assertion, saw 0 phantoms and ended
+  `FAIL` + `EXIT:1` (`e2e-selftest-phantom.log`) — the `4 -> 0` is not a vacuous zero. The
+  unmodded `CONTROL=1` leg and the original `SELFTEST=1`, `SELFTEST=flare`, `SELFTEST=pearl` and
+  `SELFTEST=spawner` legs were all re-run on this build and each ends `EXIT:1`.
+  `check-e2e-logs.py torchmaster-e2e --strict` → `logs=7 ok=7`; `torchmaster --strict` → `logs=7 ok=7`.
+- **Carrying families stay green:** the spawner, pearl, flare, both spawn-veto blocks, both drops
+  and every `/torchmaster` readout re-ran on the delivered bytes.
+
+**Two harness traps cost runs and are recorded here.** (1) Horizon roots worlds at
+`<cwd>/saves/<folder>` (`game/world_loading.rs:419`), so a stats file written at `<cwd>/<folder>`
+is never read. (2) The launcher names the owner `PlayerNNNNN`, so their UUID is *not*
+`offline_uuid("Player")`; the fixture must be written to every UUID the world has player data for.
+The focused probe that isolated both is `ports/_shared/evidence/torchmaster/phantom/probe-phantom.{sh,log}`.
+
+Delivered `torchmaster.hmod` **44,630 B**, SHA-256
+**`89fe9162ee4d00238dad2745729cbf0f0a0b21dc696742219a832191312b3b19`**, 44 entries, no `Cargo.lock`.
+
+### Coverage
+
+| Family | State |
+|---|---|
+| Phantom spawn veto: a Mega Torch in the player's cube stops phantoms near an insomniac player | tested (e2e phase H, type-filtered count `4 -> 0`, `SELFTEST=phantom` `EXIT:1`) |
+| The veto is category- and dimension-specific (a Dread Lamp never vetoes, a torch elsewhere never vetoes) | tested (2 pure unit tests) |
+| Mega Torch / Dread Lamp natural-spawn veto, both recipes and loot tables, drops, `/torchmaster` readout, flare light, pearl cleanup, spawner quietening | tested (the seven carried legs, re-run green on 0.2.6) |
+| Village sieges (`VillageSiegeEvent`) | not ported (companion family; not bundled into this slice) |
+| Frozen Pearl sound, line-of-sight menu/GUI, volume renderer | not ported (tier `logic`; no sound/menu/renderer surface carried) |
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices (named consts, pure rule free of `mod_api`, `expect` with a reason, rustfmt single-line assertions, no clone-to-satisfy-borrowck)
+
+## Next slice
+
+**Family:** village-siege veto, the companion spawn family the artefact declares and the pin stamps
+alongside the phantom hook.
+**Gap line:** "Phantoms and village sieges. Upstream also vetoes phantom spawns
+(`PlayerSpawnPhantomsEvent`) … both are slice 2" (§Gaps above); phantoms closed in 0.2.6, sieges
+remain.
+**Tier fit:** `logic` — `hook:village_siege` (API 389) is stamped at this pin, and
+`TorchmasterEventHandler.onVillageSiege` uses `shouldBlockVillageZombieRaid(pos)` with the same
+registry; no GUI or renderer. Read the event's stamped fields and the artefact's siege rule first —
+do not assume it reuses the phantom gate, because upstream's `blockVillageSieges` default and the
+siege's own radius may differ.
+**In-game assertion:** with a Mega Torch in range of a village centre, trigger a siege in a sealed
+sky box and assert the type-filtered `ctl entities 16 minecraft:zombie` count is lower than with
+the torch broken; parse the count, never an absence of error, and make `SELFTEST=siege` invert it
+and end `EXIT:1`.

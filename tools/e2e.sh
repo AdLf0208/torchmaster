@@ -24,6 +24,8 @@
 #     the residual lights still there and exit 1.
 #   * SELFTEST=spawner — only the spawner assertion is inverted: a lit lantern must
 #     quiet the spawner, so seeing the same count as the dark spawner must exit 1.
+#   * SELFTEST=phantom — only the phantom assertion is inverted: a Mega Torch in
+#     range must stop phantoms near an insomniac player, so seeing any must exit 1.
 #
 #   E. the Feral Flare Lantern writes `torchmaster:invisible_light` blocks in the sealed
 #      dark box and emits light; breaking it takes the count back to zero. A plain stone
@@ -34,6 +36,10 @@
 #   G. a zombie spawner in a sealed dark box spawns mobs; a lit feral lantern beside it
 #      raises the block light at the spawner above vanilla's limit and quietens it.
 #      The assertion reads the *type-filtered* `ctl entities 16 minecraft:zombie` count.
+#   H. an insomniac player (a seeded `time_since_rest` stat) under an open night sky
+#      grows phantoms; a Mega Torch within 64 blocks stops them through the stamped
+#      `player_spawn_phantoms` veto. The assertion parses the type-filtered
+#      `ctl entities 48 minecraft:phantom` count, never an absence of error.
 #
 # The arenas are sealed stone boxes in the Overworld sky (floor y=200, roof y=208), where
 # the world surface is far below, so the only natural-spawn attempts near the player are
@@ -231,6 +237,31 @@ invisible_lights() {
 # The spawner assertion parses the count of one entity type, never the absence of
 # an error: `ctl entities 16 minecraft:zombie` answers a JSON list of exactly zombies.
 zombie_count() { ctl entities 16 minecraft:zombie | jq -r '.entities | length'; }
+# A phantom is spawned 20..34 blocks above the player, so a 16-block search
+# misses it until it dives; the type-filtered count over 48 blocks is the count
+# that can actually fail. `ctl entities 48 minecraft:phantom` answers exactly
+# phantoms, never an error-free absence.
+phantom_count() {
+    ctl entities 48 minecraft:phantom \
+        | jq -r '[.entities[] | select((.health // 0) > 0)] | length'
+}
+# Wait up to `max` ticks for a phantom, printing the waited ticks. Returns 1 if
+# none appeared; the caller still reads the count so a zero is never a vacuous
+# absence-of-error pass.
+wait_for_phantoms() { # max
+    local max=$1 waited=0 count
+    while [ "$waited" -lt "$max" ]; do
+        ctl wait 100 >/dev/null
+        waited=$((waited + 100))
+        count=$(phantom_count)
+        if [ "$count" -gt 0 ]; then
+            echo "$waited"
+            return 0
+        fi
+    done
+    echo "$waited"
+    return 1
+}
 # The pearl's remaining wear, summed over the carried stacks. `ctl inventory`
 # reports `damage` only when it is nonzero, so an unworn pearl reads 0.
 pearl_damage() {
@@ -269,6 +300,35 @@ build_room() { # cx cz y roof-block
     ctl wait 5 >/dev/null
 }
 
+
+# Phantom spawning needs an insomniac player: the game grows
+# `minecraft:time_since_rest` one tick at a time and refuses a spawn until
+# 72000. Waiting that long in real time is not a harness; seed the stat instead.
+# A fresh world only knows its owner after the first save, so open it once,
+# close it, write the stat for the offline UUID of "Player", then reopen the
+# same world with the insomnia fixture in place.
+echo "== seed: open the world once so its player stats file exists =="
+launch "TorchmasterR9"
+ctl quit >/dev/null 2>&1 || true
+sleep 5
+# The game roots worlds at <cwd>/saves/<folder> (game/world_loading.rs:419).
+STATS_DIR=$SCRATCH/saves/TorchmasterR9/players/stats
+mkdir -p "$STATS_DIR"
+# The launcher gives the owner a random name (e.g. Player89710), so their UUID
+# is NOT offline_uuid("Player"). Seed every stats file the world already wrote
+# and every UUID it has player data for; one of them is the owner the server
+# thread loads. That is what makes the insomnia fixture independent of the name.
+INSOMNIA='{"stats":{"minecraft:custom":{"minecraft:time_since_rest":1000000}},"DataVersion":3953}'
+for f in "$STATS_DIR"/*.json; do
+    [ -f "$f" ] || continue
+    printf '%s\n' "$INSOMNIA" > "$f"
+done
+for dat in "$SCRATCH/saves/TorchmasterR9/players/data"/*.dat; do
+    [ -f "$dat" ] || continue
+    printf '%s\n' "$INSOMNIA" > "$STATS_DIR/$(basename "$dat" .dat).json"
+done
+echo "  saved player data: $(ls "$SCRATCH/saves/TorchmasterR9/players/data" 2>/dev/null | tr '\n' ' ')"
+echo "  stats files seeded: $(for f in "$STATS_DIR"/*.json; do [ -f "$f" ] && basename "$f"; done | tr '\n' ' ')"
 
 echo "== launch (launcher build of $MOD, offscreen, creative) =="
 launch "TorchmasterR9"
@@ -666,5 +726,59 @@ ctl command "setblock 0 201 0 minecraft:air" >/dev/null
 ctl command "setblock 2 201 0 minecraft:air" >/dev/null
 ctl command "gamemode creative @a" >/dev/null
 
-echo "PASS: control=$control_hostile, torch=$torch_hostile, outside=$outside_hostile, after_break=$returned_hostile monsters; lamp_control=$control_bats, lamp=$lamp_bats, lamp_outside=$outside_bats bats, lamp_box_monsters=$lamp_hostile; drops torch=$torch_drop lamp=$lamp_drop control=$control_drop; flare=$flare_count lights, after break $after_flare, stone control $stone_lights; pearl $pearl_before -> $pearl_after lights for damage $dmg_before -> $dmg_after, vanilla cell $standby -> $standby_after for damage $dmg_diff; spawner $spawner_lit -> $spawner_dark zombies beside a lit lantern; /torchmaster readouts matched at every phase"
+# ---- H. a Mega Torch vetoes phantom spawns near an insomniac player ---------------
+say "H. the phantom veto: a Mega Torch in range stops phantoms under an open night sky"
+ctl command "gamemode creative @a" >/dev/null
+ctl command "gamerule doMobSpawning true" >/dev/null || true
+ctl command "gamerule spawn_monsters true" >/dev/null || true
+ctl command "gamerule spawn_phantoms true" >/dev/null || true
+ctl command "difficulty hard" >/dev/null
+time_reply=$(ctl time 18000)
+echo "  ctl time 18000 -> $time_reply"
+ctl wait 5 >/dev/null
+# Vanilla's phantom spawner needs can_see_sky at the player, so this arena has a
+# floor and NO roof (unlike the sealed monster boxes A/B). The player's insomnia
+# was seeded from a stats file before the launch (see the seed phase at the top).
+ctl tp 480.5 201 0.5 >/dev/null
+ctl wait 60 >/dev/null
+ctl command "fill 448 200 -32 512 200 32 minecraft:stone" >/dev/null
+ctl wait 5 >/dev/null
+ctl tp 480.5 201 0.5 >/dev/null
+ctl wait 10
+[ "$(block_id 480 200 0)" = "minecraft:stone" ] || fail "phantom arena floor was not built"
+echo "  phantom conditions: state=$(ctl state | jq -c '{screen,day_time,dimension}'), light at player=$(ctl light 480 201 0 480 201 0 | jq -c .)"
+echo "  time query: $(ctl command 'time query daytime')"
+echo "  registry at H: $(readout '/torchmaster' | tr '\n' '|')"
+
+say "H1. control: an insomniac player under an open night sky grows phantoms"
+ctl command "kill @e[type=minecraft:phantom]" >/dev/null || true
+ctl wait 3 >/dev/null
+waited=$(wait_for_phantoms 5200 || true)
+control_phantoms=$(phantom_count)
+echo "  control: $control_phantoms phantoms within 48 blocks after $waited ticks"
+[ "$control_phantoms" -gt 0 ] || fail "an insomniac player under an open night sky grew no phantoms"
+
+say "H2. a Mega Torch within the artefact's 64-block radius vetoes the attempt"
+ctl setblock 490 208 0 "$MEGA" >/dev/null
+ctl wait 3
+[ "$(block_id 490 208 0)" = "$MEGA" ] || fail "the phantom-veto Mega Torch did not place"
+ctl command "kill @e[type=minecraft:phantom]" >/dev/null || true
+ctl wait 3 >/dev/null
+# H1 proved an attempt happens and the spawner's timer resets to 1200..2400
+# ticks; two full windows make sure at least one vetoed attempt falls here even
+# if the timer had just reset when the torch was placed.
+ctl wait 5200 >/dev/null
+torch_phantoms=$(phantom_count)
+echo "  with the torch: $torch_phantoms phantoms after 5200 ticks (control $control_phantoms)"
+if [ "$SELFTEST" = phantom ]; then
+    # Inverted on purpose: the placed torch must have stopped the spawns, so
+    # this run MUST fail. Every earlier phase stays green, isolating this assertion.
+    [ "$torch_phantoms" -gt 0 ] || fail "SELFTEST: expected phantoms despite the torch, saw $torch_phantoms"
+    fail "SELFTEST: the inverted phantom assertion passed (exit 1 is the counterfactual)"
+fi
+[ "$torch_phantoms" -lt "$control_phantoms" ] \
+    || fail "the Mega Torch did not reduce phantom spawns ($control_phantoms -> $torch_phantoms)"
+ctl command "setblock 490 208 0 minecraft:air" >/dev/null
+
+echo "PASS: control=$control_hostile, torch=$torch_hostile, outside=$outside_hostile, after_break=$returned_hostile monsters; lamp_control=$control_bats, lamp=$lamp_bats, lamp_outside=$outside_bats bats, lamp_box_monsters=$lamp_hostile; drops torch=$torch_drop lamp=$lamp_drop control=$control_drop; flare=$flare_count lights, after break $after_flare, stone control $stone_lights; pearl $pearl_before -> $pearl_after lights for damage $dmg_before -> $dmg_after, vanilla cell $standby -> $standby_after for damage $dmg_diff; spawner $spawner_lit -> $spawner_dark zombies beside a lit lantern; phantom $control_phantoms -> $torch_phantoms near an insomniac player; /torchmaster readouts matched at every phase"
 exit 0

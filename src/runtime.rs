@@ -150,6 +150,24 @@ pub fn blocks(
     })
 }
 
+/// The radius upstream's `onPlayerSpawnPhantoms` uses for its phantom check.
+///
+/// It calls `shouldBlockEntityType(EntityType.PHANTOM, level, player.position(),
+/// MobSpawnType.NATURAL)` — the same mega-torch rule as the natural-spawn veto —
+/// so the range is `megaTorchRadius` (default 64), not a separate setting.
+/// Source: `common/.../events/TorchmasterEventHandler.java:106-129`.
+pub const PHANTOM_RADIUS: i32 = RADIUS;
+
+/// Whether a phantom spawn attempt near the player at `pos` is vetoed.
+///
+/// A phantom is in the `monster` category, so only the Mega Torch's list matches;
+/// the Dread Lamp's friendly list does not. The veto uses the player's block
+/// position and the dimension their level names, never a guessed range.
+#[must_use]
+pub fn phantom_veto(dimension: &str, pos: [i32; 3], lights: &[Light]) -> bool {
+    blocks(dimension, "monster", pos, lights, PHANTOM_RADIUS)
+}
+
 /// Insert `light`, replacing a light already at the same dimension and
 /// position (a mega torch swapped for a dread lamp keeps one entry).
 pub fn upsert(lights: &mut Vec<Light>, light: Light) {
@@ -892,5 +910,44 @@ mod tests {
         assert!(spawner_light_suppresses(SPAWNER_LIGHT_LIMIT + 1));
         assert!(spawner_light_suppresses(i32::from(FLARE_LIGHT_LEVEL)));
         assert!(spawner_light_suppresses(FLARE_MIN_LIGHT));
+    }
+
+    // ---- the phantom spawn veto (0.2.6) --------------------------------------------
+
+    #[test]
+    fn a_mega_torch_within_the_artefact_radius_vetoes_a_phantom_near_the_player() {
+        // Upstream's `onPlayerSpawnPhantoms` asks `shouldBlockEntityType(PHANTOM,
+        // level, player.position(), NATURAL)`: the same mega-torch rule as the
+        // natural-spawn veto, with `megaTorchRadius` (default 64).
+        assert_eq!(PHANTOM_RADIUS, 64);
+        let lights = vec![light(
+            "minecraft:overworld",
+            [0, 201, 0],
+            LightKind::MegaTorch,
+        )];
+        assert!(phantom_veto("minecraft:overworld", [0, 201, 0], &lights));
+        assert!(phantom_veto("minecraft:overworld", [40, 201, 40], &lights));
+    }
+
+    #[test]
+    fn a_dread_lamp_does_not_veto_a_phantom_spawn() {
+        // A phantom is a `monster`; the lamp vetoes only the friendly categories.
+        let lights = vec![light(
+            "minecraft:overworld",
+            [0, 201, 0],
+            LightKind::DreadLamp,
+        )];
+        assert!(!phantom_veto("minecraft:overworld", [0, 201, 0], &lights));
+    }
+
+    #[test]
+    fn a_torch_out_of_range_or_in_another_dimension_does_not_veto() {
+        let lights = vec![light(
+            "minecraft:overworld",
+            [0, 201, 0],
+            LightKind::MegaTorch,
+        )];
+        assert!(!phantom_veto("minecraft:overworld", [160, 201, 0], &lights));
+        assert!(!phantom_veto("minecraft:the_end", [0, 201, 0], &lights));
     }
 }
