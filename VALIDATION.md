@@ -45,6 +45,27 @@ Changed: `log` removed (no logging surface at the pin; `/torchmaster` and `/torc
 the information), `Cargo.lock` deleted, `Cargo.toml` and `horizon-mod.toml` at 0.2.2. Full record in
 [`notes.md`](notes.md) §0.2.2.
 
+## 0.2.3 — the Feral Flare Lantern and its invisible light (2026-11-24, pin `0a875da`)
+
+| Check | Command | Result |
+|---|---|---|
+| artefact rules | upstream 21.1.14 clone, `ModRegistry.java` / `…BlockEntity.java` / `TorchmasterNeoforgeConfig.java` | id `torchmaster:feral_flare_lantern`, light `torchmaster:invisible_light`, light level **15**, radius **16**, cadence **5** ticks, min light **10**, cap **255**, lifetime until the lantern breaks |
+| TDD | tests first, then the pure flare engine | 42-error compile red (`../_shared/evidence/torchmaster/flare/unit-tdd-red.log`) → **16 passed** (`unit-tdd-green.log`) |
+| tests | `cargo test --offline` | **16 passed**, 0 failed (`flare/unit-tdd-green.log`, regenerated `sdk-test.log`) |
+| fmt + lints | `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` | clean, 0 warnings (`flare/lint.log`) |
+| package | `rm -f Cargo.lock && cargo horizon-mod build` | 0.2.3 `.hmod`, no `Cargo.lock` inside |
+| registry check | `cargo horizon-mod check torchmaster.hmod` | `torchmaster 0.2.3 (native-mod, native-1/0a875da…/e59da90…, for 26.3)` |
+| fits | `cargo horizon-mod fits torchmaster.hmod --build 0a875da` / `--build 0b14f8a` | `0a875da  made for` / `fits`, both exit 0 |
+| gate | `python3 ports/tools/verify-sdk-package.py torchmaster` | **1/1**, including `package matches the tree` |
+| delivered | `torchmaster.hmod` | **34,758 B**, SHA-256 `51042af1bcf1d087f6c0b11b048502df53ea10a3ea70663e9c5941c17d3ce6d8`, 40 entries |
+| launcher | `launcher-game.sh build torchmaster` | `Compiling torchmaster (1 of 1)`, `native-0a875da-fa100b01b09e`, `EXIT:0` (`../_shared/evidence/torchmaster/flare/native-build.log`) |
+| flare proof | `tools/e2e.sh` phase E + E2 | `PASS` + `EXIT:0`: 60 ticks → **7** invisible lights, lantern block light **15**, breaking → **0**, stone differential **0** (`../_shared/evidence/torchmaster-e2e/e2e.log`) |
+| counterfactual | `SELFTEST=flare tools/e2e.sh` | `FAIL` + `EXIT:1` (`e2e-selftest-flare.log`) |
+| carried recipe + loot | `tools/e2e-dialect.sh` (three specs: megatorch, dreadlamp, flare) | `PASS` + `EXIT:0`; `SELFTEST=1` `FAIL` + `EXIT:1` |
+| log gate | `check-e2e-logs.py torchmaster-e2e --strict` | all logs end `EXIT:<n>`, exit 0 |
+
+Full record in [`notes.md`](notes.md) §0.2.3.
+
 ## The retired `.hnmod` bundle (pin `1d63e0a`, kept for the record)
 
 | Check | Result |

@@ -1,0 +1,19 @@
+{
+  "recipe": {
+    "file": "data/torchmaster/recipe/feral_flare_lantern.json",
+    "tag_items": {
+      "#c:ingots/gold": "minecraft:gold_ingot",
+      "#c:dusts/glowstone": "minecraft:glowstone_dust",
+      "#c:glass_blocks": "minecraft:glass"
+    },
+    "expect": {
+      "id": "torchmaster:feral_flare_lantern",
+      "count": 1
+    },
+    "consume": "minecraft:gold_ingot"
+  },
+  "loot": {
+    "block": "torchmaster:feral_flare_lantern",
+    "expect": "torchmaster:feral_flare_lantern"
+  }
+}

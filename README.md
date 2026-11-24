@@ -7,13 +7,14 @@ Port of **Torchmaster 21.1.14** (`Xalcon/TorchMaster`, MIT) for Minecraft Java
 source.
 
 One flat `.hmod` carries both halves: `assets/` and `data/` are the content
-(two blocks, their items, recipes, loot, tags, models and textures, adapted from
+(three blocks, their items, recipes, loot, tags, models and textures, adapted from
 the upstream MIT assets), `src/` is the native half.
 
 | Block | What it does |
 |---|---|
 | `torchmaster:megatorch` | vetoes natural spawns of every non-friendly category (vanilla: `monster`) in a cube of 64 around it |
 | `torchmaster:dreadlamp` | vetoes natural spawns of the friendly categories except `misc` in a cube of 64 |
+| `torchmaster:feral_flare_lantern` | writes `torchmaster:invisible_light` blocks (light 15) into empty, dark cells within 16 blocks, every 5 ticks, up to 255; breaking it removes them |
 
 The veto covers the **natural spawn path only**, as the original's
 `blockOnlyNaturalSpawns` default asks: spawn eggs, breeding, spawners and
@@ -29,13 +30,13 @@ what the removed `log` calls used to say (see `notes.md` §0.2.2).
 ```
 horizon-mod.toml   the manifest and the only identity (api 0.2, [native] pin)
 Cargo.toml         horizon-mod-api from .horizon/sdk/ — the only dependency (R9)
-src/runtime.rs     the pure engine: kinds, cubic range, registry, TSV file, readout (11 tests)
+src/runtime.rs     the pure engine: kinds, cubic range, light/flare registries, TSV file, readout (16 tests)
 src/lib.rs         the one impl Hooks: potential_spawns, block_changed,
                    server_started, world_lifecycle, level_tick_post,
                    register_commands, run_mod_command
 assets/torchmaster/  models, blockstates, textures, lang
 data/torchmaster/    block declarations, recipes, loot, creative tab
-data/minecraft/tags/ the mineable tags the two blocks belong in
+data/minecraft/tags/ the mineable tag the blocks belong in; data/c/tags/ the recipe tags
 icon.png           128x128, from the publish tree
 LICENSE, LICENSE-NOTICE.md   Xalcon's MIT text and the notice, inside the package
 ```

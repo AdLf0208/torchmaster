@@ -1,0 +1,21 @@
+{
+  "template": "minecraft:end_rod",
+  "properties": {
+    "hardness": 1.0,
+    "explosion_resistance": 1.0,
+    "light": 15,
+    "requires_tool": false,
+    "map_color": 18,
+    "sounds": "minecraft:lantern"
+  },
+  "shapes": {
+    "default": [[0.25, 0.0, 0.25, 0.75, 1.0, 0.75]]
+  },
+  "collision_shapes": {
+    "default": [[0.25, 0.0, 0.25, 0.75, 1.0, 0.75]]
+  },
+  "default_state": {
+    "facing": "south"
+  },
+  "item": true
+}

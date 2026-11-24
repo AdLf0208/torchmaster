@@ -18,6 +18,12 @@
 #     fail. That is the differential that makes the green leg mean something.
 #   * SELFTEST=1 — the mega-torch phase's assertion inverted: the run must see monsters
 #     in the vetoed box and exit 1. That is the counterfactual.
+#   * SELFTEST=flare — the same run, but only the flare-light assertion is inverted
+#     (the earlier phases stay green); it must see no light and exit 1.
+#
+#   E. the Feral Flare Lantern writes `torchmaster:invisible_light` blocks in the sealed
+#      dark box and emits light; breaking it takes the count back to zero. A plain stone
+#      block in a second sealed box writes none (differential).
 #
 # The arenas are sealed stone boxes in the Overworld sky (floor y=200, roof y=208), where
 # the world surface is far below, so the only natural-spawn attempts near the player are
@@ -56,11 +62,14 @@ KEEP=${KEEP:-0}
 EVIDENCE=$CLONE/ports/_shared/evidence/${MOD}-e2e
 LEG=e2e
 [ "$SELFTEST" = 1 ] && LEG=e2e-selftest
+[ "$SELFTEST" != 0 ] && [ "$SELFTEST" != 1 ] && LEG=e2e-selftest-$SELFTEST
 [ "$CONTROL" = 1 ] && LEG=e2e-control
 LOG=${LOG:-$EVIDENCE/$LEG.log}
 
 MEGA=torchmaster:megatorch
 LAMP=torchmaster:dreadlamp
+FLARE=torchmaster:feral_flare_lantern
+LIGHT=torchmaster:invisible_light
 # The friendly families (passive `creature` and `ambient`); the Dread Lamp vetoes every
 # one of them, so a monster is any mob whose type is not in this list.
 FRIENDLY='["minecraft:pig","minecraft:cow","minecraft:sheep","minecraft:chicken","minecraft:rabbit","minecraft:horse","minecraft:donkey","minecraft:mule","minecraft:llama","minecraft:fox","minecraft:wolf","minecraft:bee","minecraft:parrot","minecraft:bat","minecraft:squid","minecraft:glow_squid","minecraft:axolotl","minecraft:turtle","minecraft:frog","minecraft:armadillo","minecraft:goat","minecraft:camel","minecraft:sniffer","minecraft:cat","minecraft:ocelot","minecraft:panda","minecraft:polar_bear","minecraft:villager","minecraft:mooshroom","minecraft:allay","minecraft:tadpole","minecraft:dolphin","minecraft:strider"]'
@@ -205,6 +214,9 @@ kill_mobs() {
 
 block_id() { ctl block "$1" "$2" "$3" | jq -r '.block // "unknown"'; }
 light_block() { ctl light "$1" "$2" "$3" "$4" "$5" "$6" | jq -r '.block'; }
+invisible_lights() {
+    ctl blocks "$1" "$2" "$3" "$4" "$5" "$6" | jq -r --arg i "$LIGHT" '.counts[$i] // 0'
+}
 drop_count() { # x y z item -> what the break's `drops` says it dropped
     local reply drops picked status
     reply=$(ctl break "$1" "$2" "$3" --timeout 60) && status=0 || status=$?
@@ -464,5 +476,47 @@ echo "  drops: crafting_table $control_drop, megatorch $torch_drop, dreadlamp $l
 [ "${lamp_drop:-0}" -ge 1 ] || fail "the broken Dread Lamp dropped no $LAMP (control dropped $control_drop)"
 ctl command "gamemode creative @a" >/dev/null
 
-echo "PASS: control=$control_hostile, torch=$torch_hostile, outside=$outside_hostile, after_break=$returned_hostile monsters; lamp_control=$control_bats, lamp=$lamp_bats, lamp_outside=$outside_bats bats, lamp_box_monsters=$lamp_hostile; drops torch=$torch_drop lamp=$lamp_drop control=$control_drop; /torchmaster readouts matched at every phase"
+# ---- E. the Feral Flare Lantern and its invisible light ------------------------------
+say "E. the Feral Flare Lantern writes invisible light, and breaking it takes it back"
+ctl command "gamemode creative @a" >/dev/null
+ctl command "setblock 0 201 0 minecraft:air" >/dev/null   # the Dread Lamp from B
+ctl tp 0.5 201 0.5 >/dev/null
+ctl wait 20
+[ "$(block_id 0 201 0)" = "minecraft:air" ] || fail "arena A was not cleared for the flare leg"
+
+ctl setblock 0 201 0 "$FLARE" >/dev/null
+ctl wait 60
+flare_count=$(invisible_lights -8 200 -8 8 205 8)
+flare_lit_hex=$(light_block 0 201 0 0 201 0)
+# `ctl light` prints each layer as hex (15 -> "f"); parse it before comparing.
+flare_lit=$((16#$flare_lit_hex))
+echo "  lantern at 0 201 0: invisible lights in the room = $flare_count, its block light = $flare_lit (0x$flare_lit_hex)"
+[ "$(block_id 0 201 0)" = "$FLARE" ] || fail "the Feral Flare Lantern did not place"
+[ "$flare_count" -gt 0 ] || fail "the lantern wrote no $LIGHT in 60 ticks"
+[ "$flare_lit" -gt 0 ] || fail "the lantern declares no light (block light $flare_lit)"
+if [ "$SELFTEST" = flare ]; then
+    # Inverted on purpose: the placed lantern must have written a light, so this
+    # run MUST fail. Every earlier phase stays green, isolating this assertion.
+    [ "$flare_count" -eq 0 ] || fail "SELFTEST: expected no invisible light with the lantern placed, saw $flare_count"
+    fail "SELFTEST: the inverted flare assertion passed (exit 1 is the counterfactual)"
+fi
+
+ctl command "setblock 0 201 0 minecraft:air" >/dev/null
+ctl wait 20
+after_flare=$(invisible_lights -8 200 -8 8 205 8)
+echo "  after breaking it: invisible lights in the room = $after_flare"
+[ "$after_flare" -eq 0 ] || fail "breaking the lantern left $after_flare invisible lights behind"
+
+say "E2. differential: a plain stone block writes no invisible light"
+build_room 320 0 200 minecraft:stone
+ctl tp 320.5 201 0.5 >/dev/null
+ctl wait 20
+ctl command "setblock 320 201 0 minecraft:stone" >/dev/null
+ctl wait 60
+stone_lights=$(invisible_lights 312 200 312 328 205 328)
+echo "  stone in a sealed dark box: invisible lights = $stone_lights"
+[ "$(block_id 320 201 0)" = "minecraft:stone" ] || fail "the stone differential was not placed"
+[ "$stone_lights" -eq 0 ] || fail "a plain stone block wrote $stone_lights invisible lights"
+
+echo "PASS: control=$control_hostile, torch=$torch_hostile, outside=$outside_hostile, after_break=$returned_hostile monsters; lamp_control=$control_bats, lamp=$lamp_bats, lamp_outside=$outside_bats bats, lamp_box_monsters=$lamp_hostile; drops torch=$torch_drop lamp=$lamp_drop control=$control_drop; flare=$flare_count lights, after break $after_flare, stone control $stone_lights; /torchmaster readouts matched at every phase"
 exit 0

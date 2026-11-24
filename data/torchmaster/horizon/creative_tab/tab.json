@@ -3,6 +3,7 @@
   "icon": "torchmaster:megatorch",
   "items": [
     "torchmaster:megatorch",
-    "torchmaster:dreadlamp"
+    "torchmaster:dreadlamp",
+    "torchmaster:feral_flare_lantern"
   ]
 }

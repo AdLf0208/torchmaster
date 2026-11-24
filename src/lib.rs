@@ -23,14 +23,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use mod_api::{
-    self, BlockChangedEvent, BlockState, Command, Flow, Hooks, Host, HostSide, LevelHost,
-    LevelTickPostEvent, PotentialSpawnsEvent, RegisterCommandsEvent, RunModCommandEvent,
-    ServerHost, ServerStartedEvent, Text, WorldLifecycleEvent, WorldPhase,
+    self, BlockChangedEvent, BlockState, BlockUpdateFlags, Command, Flow, Hooks, Host, HostSide,
+    LevelHost, LevelRef, LevelTickPostEvent, LightLayer, PotentialSpawnsEvent,
+    RegisterCommandsEvent, RunModCommandEvent, ServerHost, ServerStartedEvent, Text,
+    WorldLifecycleEvent, WorldPhase,
 };
 
 use runtime::{
-    Light, LightKind, RADIUS, blocks, count_line, format_lights, light_lines, parse_lights, remove,
-    upsert,
+    FLARE_HARD_CAP, FLARE_MIN_LIGHT, FLARE_TICK_RATE, Flare, INVISIBLE_LIGHT, Light, LightKind,
+    RADIUS, blocks, count_line, format_lights, is_flare_block, is_invisible_light, light_lines,
+    next_candidate, parse_lights, remove, should_place, take_flare, upsert, upsert_flare,
 };
 
 /// The lights live in `<world>/torchmaster/lights.tsv`, the path the retired bundle used,
@@ -55,6 +57,12 @@ const LIST_LIMIT: usize = 32;
 #[derive(Default)]
 struct Store {
     lights: Vec<Light>,
+    /// Feral Flare Lanterns and the invisible lights they currently own.
+    flares: Vec<Flare>,
+    /// Child lights of a lantern that was broken or replaced, waiting for the next
+    /// level tick: `block_changed` only gets a read-only level, so the writes
+    /// happen where a writable `LevelRef` is in hand.
+    flare_removals: Vec<(String, [i32; 3])>,
     dirty: bool,
     /// A file the port could not read or write. The port once wrote this to the game log;
     /// `/torchmaster` reports it now, because R9 allows no logging crate.
@@ -95,25 +103,39 @@ impl Hooks for Mod {
         }
         let before = light_kind(level, event.old);
         let after = light_kind(level, event.new);
-        if before == after {
+        let old_flare = level.state_block(event.old).is_some_and(is_flare_block);
+        let new_flare = level.state_block(event.new).is_some_and(is_flare_block);
+        if before == after && old_flare == new_flare {
             return;
         }
         let dimension = event.dimension.key().id();
         let pos = [event.pos.x, event.pos.y, event.pos.z];
         let mut store = self.store.lock().expect(LOCK);
-        match after {
-            Some(kind) => {
-                upsert(
+        if before != after {
+            match after {
+                Some(kind) => upsert(
                     &mut store.lights,
                     Light {
                         dimension: dimension.to_owned(),
                         pos,
                         kind,
                     },
-                );
+                ),
+                None => remove(&mut store.lights, dimension, pos),
             }
-            None => {
-                remove(&mut store.lights, dimension, pos);
+        }
+        if old_flare != new_flare {
+            if new_flare {
+                upsert_flare(&mut store.flares, dimension, pos);
+            } else if let Some(flare) = take_flare(&mut store.flares, dimension, pos) {
+                // The lantern is gone: all of its invisible lights go with it,
+                // just as `FeralFlareLanternBlock.onRemove` does upstream.
+                store.flare_removals.extend(
+                    flare
+                        .children
+                        .into_iter()
+                        .map(|child| (dimension.to_owned(), child)),
+                );
             }
         }
         store.dirty = true;
@@ -151,9 +173,10 @@ impl Hooks for Mod {
         }
     }
 
-    /// After a level's tick: every five seconds, drop the lights of this dimension whose
-    /// block is gone and flush a changed registry. A light in an unloaded chunk is kept;
-    /// its chunk will report the truth once it loads.
+    /// After a level's tick: the flare lanterns write their invisible lights every tick
+    /// (each one decides on its own 5-tick cadence), and every five seconds the registry
+    /// drops blocking lights whose block is gone and flushes a changed file. A light in
+    /// an unloaded chunk is kept; its chunk will report the truth once it loads.
     fn level_tick_post(&self, host: HostSide<'_>, event: &mut LevelTickPostEvent) {
         let HostSide::Server(host) = host else {
             // The client's levels are not where the registry lives, and a veto there would
@@ -164,16 +187,19 @@ impl Hooks for Mod {
         let world = host.world_dir();
         // The level's services are called on the handle, with the host as their context;
         // the host's own area traits are the game's side of them, not the mod's.
-        let game: &dyn Host = &*host;
-        let Some(time) = level.game_time(game) else {
+        let time = level.game_time(&*host);
+        let dimension = level.dimension().id(&*host);
+        let (Some(time), Some(dimension)) = (time, dimension) else {
             return;
         };
+        // The flare writes need the mutable host, so it happens before the read-only
+        // borrow that the pruning pass keeps.
+        self.tick_flares(host, level, &dimension);
+
         if time % PRUNE_TICKS != 0 {
             return;
         }
-        let Some(dimension) = level.dimension().id(game) else {
-            return;
-        };
+        let game: &dyn Host = &*host;
         let mut changed = false;
         let mut store = self.store.lock().expect(LOCK);
         store.lights.retain(|light| {
@@ -224,6 +250,91 @@ impl Hooks for Mod {
             let _ = host.commands().feedback(Text::literal(line));
         }
         Flow::Cancel
+    }
+}
+
+impl Mod {
+    /// One level tick of every Feral Flare Lantern in `dimension`, plus the child
+    /// lights a broken lantern left queued for removal.
+    fn tick_flares(&self, host: &mut dyn ServerHost, level: LevelRef, dimension: &str) {
+        let game: &dyn Host = &*host;
+        let light_state = game.block_state_id(INVISIBLE_LIGHT);
+        let (placements, removals) = {
+            let mut store = self.store.lock().expect(LOCK);
+            let mut removals = Vec::new();
+            store.flare_removals.retain(|(where_, pos)| {
+                if where_ == dimension {
+                    removals.push(*pos);
+                    false
+                } else {
+                    true
+                }
+            });
+            let mut placements = Vec::new();
+            for (index, flare) in store.flares.iter_mut().enumerate() {
+                if flare.dimension != dimension {
+                    continue;
+                }
+                flare.ticks += 1;
+                if !should_place(
+                    flare.ticks,
+                    flare.children.len(),
+                    FLARE_TICK_RATE,
+                    FLARE_HARD_CAP,
+                ) {
+                    continue;
+                }
+                let Some(state) = light_state else {
+                    continue;
+                };
+                if let Some(pos) = next_candidate(flare, |pos| {
+                    let Some(block) = level.block(game, pos) else {
+                        return false; // the chunk is not loaded
+                    };
+                    let id = block.id(game);
+                    if !matches!(
+                        id.as_str(),
+                        "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
+                    ) {
+                        return false;
+                    }
+                    level
+                        .brightness(game, LightLayer::Block, pos)
+                        .is_some_and(|light| light < FLARE_MIN_LIGHT)
+                }) {
+                    placements.push((index, pos, state));
+                }
+            }
+            (placements, removals)
+        };
+
+        for pos in removals {
+            let is_ours = {
+                let game: &dyn Host = &*host;
+                level
+                    .block(game, pos)
+                    .is_some_and(|block| is_invisible_light(&block.id(game)))
+            };
+            if is_ours {
+                let _ = level.remove_block(host, pos, false);
+            }
+        }
+        for (index, pos, state) in placements {
+            let wrote = level
+                .set_block(
+                    host,
+                    pos,
+                    state,
+                    BlockUpdateFlags::NEIGHBORS | BlockUpdateFlags::CLIENTS,
+                )
+                .unwrap_or(false);
+            if wrote {
+                let mut store = self.store.lock().expect(LOCK);
+                if let Some(flare) = store.flares.get_mut(index) {
+                    flare.children.push(pos);
+                }
+            }
+        }
     }
 }
 

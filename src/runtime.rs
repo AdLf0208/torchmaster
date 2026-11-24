@@ -21,6 +21,14 @@
 // (`x + 0.5`) and its y is the feet block's y, so the reachable block cells are
 // `[torch - r, torch + r]` on x/z and `[torch - r, torch + r + 1]` on y.
 // `in_range` reproduces that exactly instead of silently squaring the cube.
+//
+// The Feral Flare Lantern (0.2.3) is a different family: it owns no spawn veto. It
+// writes `torchmaster:invisible_light` blocks into empty, dark cells around itself
+// and removes exactly those when it breaks. Its ids, light level and placement
+// numbers are read from the artefact (`ModRegistry.java:82-107`,
+// `FeralFlareLanternBlockEntity.java:65-124`, `TorchmasterNeoforgeConfig.java:99-120`).
+
+use std::sync::OnceLock;
 
 pub const MEGA_TORCH: &str = "torchmaster:megatorch";
 pub const DREAD_LAMP: &str = "torchmaster:dreadlamp";
@@ -28,6 +36,21 @@ pub const DREAD_LAMP: &str = "torchmaster:dreadlamp";
 /// Upstream's `megaTorchRadius` / `dreadLampRadius` default
 /// (`TorchmasterNeoforgeConfig.java:67-76`).
 pub const RADIUS: i32 = 64;
+
+/// The lantern block id (`ModRegistry.java:82`).
+pub const FERAL_FLARE_LANTERN: &str = "torchmaster:feral_flare_lantern";
+/// The invisible light block it writes (`ModRegistry.java:100`).
+pub const INVISIBLE_LIGHT: &str = "torchmaster:invisible_light";
+/// `feralFlareRadius` (NeoForge default 16, `TorchmasterNeoforgeConfig.java:99-102`).
+pub const FLARE_RADIUS: i32 = 16;
+/// `feralFlareTickRate` (NeoForge default 5, `TorchmasterNeoforgeConfig.java:104-107`).
+pub const FLARE_TICK_RATE: u64 = 5;
+/// `feralFlareMinLightLevel` (NeoForge default 10, `TorchmasterNeoforgeConfig.java:109-112`).
+pub const FLARE_MIN_LIGHT: i32 = 10;
+/// `feralFlareLanternLightCountHardcap` (NeoForge default 255, `:114-120`).
+pub const FLARE_HARD_CAP: usize = 255;
+/// Both blocks declare `.lightLevel(state -> 15)` (`ModRegistry.java:87,102`).
+pub const FLARE_LIGHT_LEVEL: u8 = 15;
 
 /// The two blocking lights this slice carries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -236,6 +259,129 @@ pub fn light_lines(lights: &[Light], max: usize) -> Vec<String> {
         lines.push(format!("torchmaster: … {} more", lights.len() - max));
     }
     lines
+}
+
+/// One placed Feral Flare Lantern and the invisible lights it currently owns.
+///
+/// Upstream keeps this in the lantern's block entity (`lights`, `ticks`,
+/// `useLoS` in `FeralFlareLanternBlockEntity.java:132-159`). The port keeps the
+/// same shape in the mod's store: the lights live until the lantern breaks or
+/// is replaced, when all of them are removed (`removeChildLights`, `:177-188`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Flare {
+    pub dimension: String,
+    pub pos: [i32; 3],
+    pub children: Vec<[i32; 3]>,
+    /// Where the next placement attempt resumes in [`flare_offsets`].
+    pub cursor: usize,
+    /// Ticks since placement; placement is attempted every [`FLARE_TICK_RATE`].
+    pub ticks: u64,
+}
+
+impl Flare {
+    /// A freshly placed lantern owns no lights and starts at the nearest cell.
+    #[must_use]
+    pub fn new(dimension: String, pos: [i32; 3]) -> Self {
+        Self {
+            dimension,
+            pos,
+            children: Vec::new(),
+            cursor: 0,
+            ticks: 0,
+        }
+    }
+}
+
+/// Whether a block id names the lantern (as opposed to either blocking light).
+#[must_use]
+pub fn is_flare_block(name: &str) -> bool {
+    name == FERAL_FLARE_LANTERN
+}
+
+/// Whether a block id names the invisible light the lantern writes.
+#[must_use]
+pub fn is_invisible_light(name: &str) -> bool {
+    name == INVISIBLE_LIGHT
+}
+
+/// The candidate offsets, nearest first, for one placement attempt.
+///
+/// Upstream picks a uniformly random cell of a `2r × 2r × 2r` cube
+/// (`FeralFlareLanternBlockEntity.java:78-84`). The port walks the same radius in
+/// a fixed, nearest-first order instead: the pin exposes no per-lantern random
+/// stream at the level tick, and a deterministic order makes the placement
+/// observable within a bounded in-game wait and reproducible in a unit test.
+/// The set of cells, the empty/dark checks and the cap are unchanged.
+#[must_use]
+pub fn flare_offsets() -> &'static [[i32; 3]] {
+    static OFFSETS: OnceLock<Vec<[i32; 3]>> = OnceLock::new();
+    OFFSETS.get_or_init(|| {
+        let axis: Vec<i32> = (0..=FLARE_RADIUS)
+            .flat_map(|d| if d == 0 { vec![0] } else { vec![d, -d] })
+            .collect();
+        let mut offsets = Vec::with_capacity(axis.len().saturating_pow(3));
+        for &x in &axis {
+            for &y in &axis {
+                for &z in &axis {
+                    offsets.push([x, y, z]);
+                }
+            }
+        }
+        offsets.sort_by_key(|o| {
+            let max = o.iter().map(|v| v.abs()).max().unwrap_or(0);
+            let manhattan = o.iter().map(|v| v.abs()).sum::<i32>();
+            (max, manhattan, o[0], o[1], o[2])
+        });
+        offsets
+    })
+}
+
+/// The next empty, dark cell in the lantern's radius, or `None` if none is left.
+///
+/// `valid` is the game-side check (loaded, `minecraft:air`, block light below
+/// [`FLARE_MIN_LIGHT`]); keeping it a closure leaves this function pure.
+pub fn next_candidate<F>(flare: &mut Flare, valid: F) -> Option<[i32; 3]>
+where
+    F: Fn([i32; 3]) -> bool,
+{
+    let offsets = flare_offsets();
+    for step in 0..offsets.len() {
+        let index = (flare.cursor + step) % offsets.len();
+        let [dx, dy, dz] = offsets[index];
+        let pos = [flare.pos[0] + dx, flare.pos[1] + dy, flare.pos[2] + dz];
+        if valid(pos) {
+            flare.cursor = (index + 1) % offsets.len();
+            return Some(pos);
+        }
+    }
+    None
+}
+
+/// Whether this tick should place a light: every `rate` ticks and below the cap.
+///
+/// Upstream tests `childLights.size() > hardcap`, which places one more light
+/// than the configured cap. The port uses `>=`, so 255 really is the maximum.
+#[must_use]
+pub fn should_place(ticks: u64, children: usize, rate: u64, hardcap: usize) -> bool {
+    rate > 0 && ticks > 0 && ticks.is_multiple_of(rate) && children < hardcap
+}
+
+/// Register a placed lantern, keeping one entry per dimension and position.
+pub fn upsert_flare(flares: &mut Vec<Flare>, dimension: &str, pos: [i32; 3]) {
+    if !flares
+        .iter()
+        .any(|flare| flare.dimension == dimension && flare.pos == pos)
+    {
+        flares.push(Flare::new(dimension.to_owned(), pos));
+    }
+}
+
+/// Remove and return the lantern at `dimension`/`pos`, with its child lights.
+pub fn take_flare(flares: &mut Vec<Flare>, dimension: &str, pos: [i32; 3]) -> Option<Flare> {
+    flares
+        .iter()
+        .position(|flare| flare.dimension == dimension && flare.pos == pos)
+        .map(|index| flares.remove(index))
 }
 
 #[cfg(test)]
@@ -514,5 +660,87 @@ mod tests {
                 light("minecraft:overworld", [-7, -8, 9], LightKind::DreadLamp),
             ]
         );
+    }
+
+    // ---- the Feral Flare Lantern and its invisible light (0.2.3) --------------------
+
+    #[test]
+    fn the_flare_ids_and_upstream_defaults_are_what_the_artefact_declares() {
+        assert_eq!(FERAL_FLARE_LANTERN, "torchmaster:feral_flare_lantern");
+        assert_eq!(INVISIBLE_LIGHT, "torchmaster:invisible_light");
+        assert!(is_flare_block(FERAL_FLARE_LANTERN));
+        assert!(!is_flare_block(MEGA_TORCH));
+        assert!(is_invisible_light(INVISIBLE_LIGHT));
+        assert!(!is_invisible_light("minecraft:air"));
+        // TorchmasterNeoforgeConfig.java:99-120 and ModRegistry.java:82-107.
+        assert_eq!(FLARE_RADIUS, 16);
+        assert_eq!(FLARE_TICK_RATE, 5);
+        assert_eq!(FLARE_MIN_LIGHT, 10);
+        assert_eq!(FLARE_HARD_CAP, 255);
+        assert_eq!(FLARE_LIGHT_LEVEL, 15);
+    }
+
+    #[test]
+    fn the_first_light_goes_into_the_nearest_empty_dark_cell() {
+        let mut flare = Flare::new("minecraft:overworld".to_owned(), [0, 201, 0]);
+        // The lantern's own light is 15, so cells closer than 6 are too bright; the
+        // box's floor is at y=200. These are the rules lib.rs checks in game.
+        let dark_and_empty = |pos: [i32; 3]| {
+            let distance = pos[0].abs().max((pos[1] - 201).abs()).max(pos[2].abs());
+            pos[1] == 201 && pos[0].abs() <= 8 && pos[2].abs() <= 8 && distance >= 6
+        };
+        assert_eq!(
+            next_candidate(&mut flare, dark_and_empty),
+            Some([-6, 201, 0])
+        );
+        // The cursor moves on: the next attempt must not pick the same cell twice.
+        assert_ne!(
+            next_candidate(&mut flare, dark_and_empty),
+            Some([-6, 201, 0])
+        );
+    }
+
+    #[test]
+    fn no_candidate_is_returned_when_the_whole_radius_is_unusable() {
+        let mut flare = Flare::new("minecraft:overworld".to_owned(), [0, 201, 0]);
+        assert_eq!(next_candidate(&mut flare, |_| false), None);
+    }
+
+    #[test]
+    fn a_flare_only_places_on_its_cadence_and_stops_at_the_hard_cap() {
+        assert!(!should_place(0, 0, FLARE_TICK_RATE, FLARE_HARD_CAP));
+        assert!(!should_place(4, 0, FLARE_TICK_RATE, FLARE_HARD_CAP));
+        assert!(should_place(5, 0, FLARE_TICK_RATE, FLARE_HARD_CAP));
+        assert!(!should_place(
+            5,
+            FLARE_HARD_CAP,
+            FLARE_TICK_RATE,
+            FLARE_HARD_CAP
+        ));
+        // Upstream tests `size() > hardcap`, which allows 256 with a cap of 255.
+        // The port fixes that off-by-one: the cap is the last allowed light.
+        assert!(should_place(
+            5,
+            FLARE_HARD_CAP - 1,
+            FLARE_TICK_RATE,
+            FLARE_HARD_CAP
+        ));
+        assert!(!should_place(10, FLARE_HARD_CAP, 5, 0));
+    }
+
+    #[test]
+    fn the_flare_registry_keeps_one_lantern_per_position_and_returns_its_children() {
+        let mut flares = Vec::new();
+        upsert_flare(&mut flares, "minecraft:overworld", [0, 201, 0]);
+        upsert_flare(&mut flares, "minecraft:overworld", [0, 201, 0]);
+        assert_eq!(flares.len(), 1);
+        upsert_flare(&mut flares, "minecraft:the_end", [0, 201, 0]);
+        assert_eq!(flares.len(), 2);
+        let mut flare = take_flare(&mut flares, "minecraft:overworld", [0, 201, 0])
+            .expect("the placed lantern is in the registry");
+        flare.children.push([-6, 201, 0]);
+        assert_eq!(flare.children, vec![[-6, 201, 0]]);
+        assert_eq!(flares.len(), 1);
+        assert!(take_flare(&mut flares, "minecraft:overworld", [0, 201, 0]).is_none());
     }
 }

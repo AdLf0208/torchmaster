@@ -1,0 +1,13 @@
+{
+  "template": "minecraft:structure_void",
+  "properties": {
+    "hardness": 0.0,
+    "explosion_resistance": 0.0,
+    "light": 15,
+    "requires_tool": false,
+    "map_color": 0,
+    "sounds": "minecraft:stone",
+    "occludes": false
+  },
+  "item": false
+}

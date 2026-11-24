@@ -21,12 +21,12 @@ at the end. The retired bundle itself is archived in
 
 ## Class and tier
 
-`content` / `logic` (the ledger row). The port has a content half (two blocks,
+`content` / `logic` (the ledger row). The port has a content half (three blocks,
 their items, recipes, loot, tags, models/textures) and a native logic half (the
-placed-light registry and the spawn veto); no machine or client half is needed
-for slice 1. The feral-flare lantern/menu, invisible light, frozen pearl and the
-feral-lantern spawner interactions are outside the pre-spawn veto and are a
-later slice.
+placed-light registry, the spawn veto and the flare's light writes); no machine
+or client half is needed. The frozen pearl, the line-of-sight menu/GUI, the
+volume renderer and the feral-lantern spawner interactions remain outside this
+tier's shape and are later slices (see §0.2.3).
 
 ## Behaviour (public docs + upstream source)
 
@@ -197,9 +197,10 @@ Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-de
   400-tick creature cadence, so it is left to slice 2. The mega torch phases
   exercise the shared veto path both blocks use. **Closed in 0.2.2**, on the
   ambient family: see §0.2.2 (control 4 bats, lamp 0, 70 monsters still spawn).
-- **Feral Flare Lantern, invisible light, frozen pearl, menu/GUI, volume
-  renderer, the `/torchmaster` commands and the feral-lantern spawner
-  interactions** are not carried.
+- **Feral Flare Lantern and its invisible light are carried in 0.2.3** (see that
+  section). The **frozen pearl, the line-of-sight menu/GUI, the volume renderer
+  and the feral-lantern spawner interactions** are still not carried; the
+  `/torchmaster` commands were carried in 0.2.2.
 - **Light-level independence** is proven by placing the torch above the sealed
   roof: the roof blocks its light and the e2e asserts the room's block light is
   0, so the zero spawns are the hook, not the light level. A torch placed inside
@@ -682,3 +683,119 @@ carried recipes and both loot tables are exercised on the delivered package, and
 asserted in survival with a vanilla control.
 
 Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices (no clone-to-satisfy-borrowck, named consts, `expect` with a reason, pure functions kept free of `mod_api`)
+
+## 0.2.3 (2026-11-24) — the Feral Flare Lantern and its invisible light
+
+Pin **`0a875da91dbb0fdcb7ba8c42c11341aa229af51a`** (mixins `e59da909…`), registry entry ours
+on `main` (0.2.2 published), so this is an **Update** to **0.2.3**.
+
+### What the artefact actually declares (read, not inferred)
+
+Source: the upstream clone at `ports/_shared/upstream/torchmaster` commit
+`a11226c866bf4e9f0695621db5971418dffe3014` (21.1.14, the installed version's tag), files
+`common/src/main/java/net/xalcon/torchmaster/{ModRegistry,blocks/FeralFlareLanternBlock,
+blocks/FeralFlareLanternBlockEntity,blocks/InvisibleLightBlock}.java` and
+`neoforge/.../TorchmasterNeoforgeConfig.java`. The pack's installed jar is 21.1.9; the
+21.1.10 line-of-sight/GUI addition is deliberately not carried (tier `logic`, no menu/GUI).
+
+| Rule | Measured value | Source |
+|---|---|---|
+| lantern id | `torchmaster:feral_flare_lantern` | `ModRegistry.java:82` |
+| invisible light id | `torchmaster:invisible_light` | `ModRegistry.java:100` |
+| both blocks' light level | **15** (`.lightLevel(state -> 15)`) | `ModRegistry.java:87,102` |
+| placement radius | **16** (`feralFlareRadius`, NeoForge default) | `TorchmasterNeoforgeConfig.java:99-102` |
+| attempt cadence | every **5** ticks (`feralFlareTickRate`) | `:104-107` |
+| minimum target light | **10** (`feralFlareMinLightLevel`) | `:109-112` |
+| hard cap | **255** (`feralFlareLanternLightCountHardcap`) | `:114-120` |
+| target cell | empty (`isEmptyBlock`) **and** block light `< 10`, in a loaded chunk | `FeralFlareLanternBlockEntity.java:99-118` |
+| light lifetime | **until the lantern is removed/replaced** (`onRemove`/`destroy` → `removeChildLights`), not a timed expiry | `FeralFlareLanternBlock.java:82-97`, `…BlockEntity.java:177-188` |
+| placement shape | `DirectionalBlock`, `facing` = clicked face's opposite, default `south`, centred 4×16×4 post, hardness 1.0, lantern sound | `FeralFlareLanternBlock.java:30-39,72-79`, `ModRegistry.java:82-88` |
+| invisible light shape | `AirBlock`: no collision, replaceable, air, light 15 | `InvisibleLightBlock.java`, `ModRegistry.java:100-107` |
+
+**Deviation — deterministic cell order.** Upstream picks a uniformly random cell of the
+`2r × 2r × 2r` cube each attempt (`…BlockEntity.java:78-84`). The pin exposes no per-lantern
+random stream at `level_tick_post`, and a random walk would not place a countable light in a
+bounded in-game wait (the lantern's own light 15 excludes the first 15-block shell). The port
+walks the same radius in a fixed nearest-first order (`runtime::flare_offsets`), keeping the
+empty/dark/loaded checks, the 5-tick cadence and the cap. The first light lands six blocks from
+the lantern (the nearest cell whose own light is below 10), inside the proof's count box.
+
+**Upstream defect fixed.** The cap test is `childLights.size() > hardcap` (`:74`), which places a
+256th light with a cap of 255. `runtime::should_place` uses `children < hardcap`, so 255 is the
+real maximum; the red/green unit test pins it. A user would only notice at the cap, where
+upstream's last write exceeds the configured safety limit the comment warns about.
+
+### TDD and ladder
+
+The five new tests were written first and failed to compile against the missing symbols
+(`flare/unit-tdd-red.log`, 42 `E0425`/`E0433` errors); `flare/unit-tdd-green.log` then showed
+**16 passed, 0 failed**. One honest mid-cycle red (`15 passed; 1 failed`) was a mistaken test
+closure that used the absolute y coordinate as the radius; it was fixed in the test, not in the
+engine. `flare/lint.log`: `cargo fmt --check` + `cargo clippy --all-targets -- -D warnings`
+clean after replacing `ticks % rate == 0` with `is_multiple_of` on rustc 1.95.
+
+The five hooks are unchanged in name; `block_changed` now also registers/removes lanterns and
+queues their child lights, and `level_tick_post` calls a new private `Mod::tick_flares` before
+the 100-tick prune. Writes use `LevelRef::set_block`/`remove_block` with `NEIGHBORS | CLIENTS`
+and the pin's `BlockState` for `torchmaster:invisible_light`; both are stamped (`surface.json`
+`method:LevelWriteHost::{set_block,remove_block}`, `handle:LevelRef::{set_block,remove_block}`).
+
+Carry-over content: the block declarations (`end_rod` template for the directional lantern,
+`structure_void` for the air-like light), the upstream 16×16 texture and models, the recipe in
+26.3 dialect with its three `c` item tags declared locally, the self-drop loot table, the
+`mineable/pickaxe` tag, lang and the creative tab. A third dialect spec
+(`tools/dialect-proof-flare.json`) makes the existing `e2e-dialect.sh` prove the new recipe and
+loot table alongside the two older ones.
+
+### Coverage
+
+| Family | State |
+|---|---|
+| Mega Torch spawn veto, Dread Lamp spawn veto, both recipes/loot/drops, `/torchmaster` readout | tested (the seven existing legs, re-run on 0.2.3) |
+| Feral Flare Lantern places `invisible_light` in an empty dark cell within radius 16 | tested (`e2e.sh` phase E, `ctl blocks` count > 0) |
+| Both blocks declare light 15 | tested (`ctl light` at the lantern > 0; content `light: 15` on both) |
+| Breaking the lantern removes its child lights | tested (count returns to 0 after 20 ticks) |
+| Stone in the same sealed box writes no light | tested (differential, phase E2) |
+| Deterministic nearest-first placement, 5-tick cadence, 255 cap, child registry | tested (5 unit tests) |
+| Frozen pearl, line-of-sight menu/GUI, volume renderer, spawner interactions | not ported (tier `logic`; no menu/renderer/entity surface carried) |
+| Child-light persistence across a world restart | blocked(persistence): the block registry is rebuilt from `block_changed`, which does not fire for blocks loaded from disk; residual lights need a Frozen-Pearl-equivalent cleanup |
+
+### Final measurements on the delivered bytes
+
+`horizon-mod.toml`/`Cargo.toml` at **0.2.3**; `native-build` printed
+`Compiling torchmaster (1 of 1)` and selected `native-0a875da-fa100b01b09e`
+(`flare/native-build.log`). Delivered `torchmaster.hmod` **34,758 B**, SHA-256
+**`51042af1bcf1d087f6c0b11b048502df53ea10a3ea70663e9c5941c17d3ce6d8`**, 40 entries,
+no `Cargo.lock`; `check` names `0.2.3`, `0a875da  made for` and `0b14f8a  fits`
+(`flare/build-check-fits.log`), and `verify-sdk-package.py torchmaster` is **1/1** with
+`package matches the tree: every packed file is the tree's bytes`.
+
+In game on that build (`ports/_shared/evidence/torchmaster-e2e/`):
+`PASS: … flare=7 lights, after break 0, stone control 0 …` + `EXIT:0`;
+`SELFTEST=flare` inverted the placed-lantern assertion, saw 7 lights and ended
+`FAIL` + `EXIT:1`; the unmodded `CONTROL=1` leg and the original `SELFTEST=1` leg both redid
+their `EXIT:1`; `check-e2e-logs.py torchmaster-e2e --strict` → `logs=4 ok=4`.
+The dialect leg proved all **three** recipes and loot tables on the delivered archive
+(megatorch, dreadlamp, flare), `PASS` + `EXIT:0`, with its `SELFTEST=1` `FAIL` + `EXIT:1`.
+
+Harness note: `ctl light` prints the stored light as **hex** (`15` → `"f"`), so the flare
+assertion parses `16#$value` before comparing; the first attempt failed on that formatting
+only (`[: f: integer expected`), not on the mod.
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices
+
+## Next slice
+
+**Family:** the frozen pearl / residual-light cleanup (the remaining half of the flare family
+that is still expressible at this tier).
+**Gap line:** "The frozen pearl, the line-of-sight menu/GUI, the volume renderer and the
+feral-lantern spawner interactions are still not carried" (§0.2.3 above) and the
+`blocked(persistence)` row in the coverage table.
+**Tier fit:** `logic` — a right-clickable item that scans loaded blocks for
+`torchmaster:invisible_light` and removes them, with a durability component; no GUI, renderer
+or entity work. The pin stamps `LevelRef::remove_block` and the item-use hooks.
+**In-game assertion:** place a lantern, let it write lights, break it with a residual light left
+in place (or load a world with one), then right-click a frozen pearl at that cell; `ctl blocks
+-8 200 -8 8 205 8 | jq -r '.counts["torchmaster:invisible_light"]'` must go from `> 0` to `0`,
+while the same pearl used on a vanilla-lit cell changes no count and does not lose a charge.
+`SELFTEST=pearl` inverts the removal assertion and ends `EXIT:1`.
